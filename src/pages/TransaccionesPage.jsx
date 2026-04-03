@@ -1,56 +1,80 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { formatCOP, dateLabel, monthLabel } from '../lib/utils'
 
-// BUG 1/3 FIX: sacar currentYearMonth fuera del componente para que sea estable
-function getYearMonth() {
-  const d = new Date()
-  return { anio: d.getFullYear(), mes: d.getMonth() + 1 }
-}
-
 export default function TransaccionesPage({ refresh }) {
   const { user } = useAuth()
   const [txs, setTxs]           = useState([])
+  const [conceptoMap, setConceptoMap] = useState({})  // id → nombre
+  const [catMap, setCatMap]           = useState({})   // id → nombre categoria
   const [loading, setLoading]   = useState(true)
   const [filtro, setFiltro]     = useState('todos')
   const [busqueda, setBusqueda] = useState('')
-  // BUG 1/3 FIX: calcular una sola vez y guardar en ref para que no cambie entre renders
-  const { anio, mes } = useRef(getYearMonth()).current
 
-  const load = useCallback(async () => {
+  const now     = new Date()
+  const anio    = now.getFullYear()
+  const mes     = now.getMonth() + 1
+  const firstDay = `${anio}-${String(mes).padStart(2,'0')}-01`
+  const lastDay  = new Date(anio, mes, 0).toISOString().split('T')[0]
+
+  async function load() {
     setLoading(true)
-    const firstDay = `${anio}-${String(mes).padStart(2,'0')}-01`
-    const lastDay  = new Date(anio, mes, 0).toISOString().split('T')[0]
-    const { data, error } = await supabase
-      .from('transacciones')
-      .select('*, conceptos(nombre, categorias(nombre))')
-      .eq('user_id', user.id)
-      .gte('fecha', firstDay)
-      .lte('fecha', lastDay)
-      .order('fecha', { ascending: false })
-      .order('created_at', { ascending: false })
-    if (!error) setTxs(data || [])
-    setLoading(false)
-  }, [user.id, anio, mes])
 
-  // BUG 1/3 FIX: refresh como dependencia explícita fuerza re-ejecución
-  useEffect(() => {
-    load()
-  }, [load, refresh])
+    // SOLUCIÓN: queries planas sin joins anidados (evita problemas de RLS)
+    const [{ data: txData, error: txErr },
+           { data: consData },
+           { data: catsData }] = await Promise.all([
+      supabase.from('transacciones')
+        .select('id, fecha, valor, tipo_movimiento, medio_pago, observaciones, concepto_id, created_at')
+        .eq('user_id', user.id)
+        .gte('fecha', firstDay)
+        .lte('fecha', lastDay)
+        .order('fecha', { ascending: false })
+        .order('created_at', { ascending: false }),
+      supabase.from('conceptos')
+        .select('id, nombre, categoria_id')
+        .eq('user_id', user.id),
+      supabase.from('categorias')
+        .select('id, nombre')
+        .eq('user_id', user.id),
+    ])
+
+    if (txErr) {
+      console.error('Error cargando transacciones:', txErr.message)
+      setLoading(false); return
+    }
+
+    // Construir mapas locales
+    const cMap = {}
+    for (const cat of catsData || []) cMap[cat.id] = cat.nombre
+
+    const coMap = {}
+    for (const con of consData || []) {
+      coMap[con.id] = { nombre: con.nombre, categoria: cMap[con.categoria_id] || '' }
+    }
+
+    setTxs(txData || [])
+    setConceptoMap(coMap)
+    setCatMap(cMap)
+    setLoading(false)
+  }
+
+  // Recargar cuando refresh cambia (nuevo movimiento registrado)
+  useEffect(() => { load() }, [refresh, user.id])
 
   const filtered = txs.filter(t => {
     const matchTipo = filtro === 'todos' || t.tipo_movimiento === filtro
-    const matchBusq = !busqueda ||
-      (t.conceptos?.nombre || '').toLowerCase().includes(busqueda.toLowerCase()) ||
-      (t.observaciones || '').toLowerCase().includes(busqueda.toLowerCase())
+    const nombre    = conceptoMap[t.concepto_id]?.nombre || t.observaciones || ''
+    const matchBusq = !busqueda || nombre.toLowerCase().includes(busqueda.toLowerCase())
     return matchTipo && matchBusq
   })
 
   const totales = filtered.reduce((acc, t) => {
-    if (t.tipo_movimiento === 'ingreso') acc.ingresos += Number(t.valor)
-    else if (t.tipo_movimiento === 'gasto') acc.gastos += Number(t.valor)
-    else if (t.tipo_movimiento === 'ahorro') acc.ahorro += Number(t.valor)
+    const v = Number(t.valor)
+    if (t.tipo_movimiento === 'ingreso') acc.ingresos += v
+    else if (t.tipo_movimiento === 'gasto') acc.gastos += v
+    else if (t.tipo_movimiento === 'ahorro') acc.ahorro += v
     return acc
   }, { ingresos: 0, gastos: 0, ahorro: 0 })
 
@@ -64,7 +88,6 @@ export default function TransaccionesPage({ refresh }) {
     ingreso: 'var(--green)', gasto: 'var(--red)',
     ahorro: 'var(--amber)', transferencia: 'var(--accent)'
   }
-  const TIPO_LABELS = { ingreso: 'Ingreso', gasto: 'Gasto', ahorro: 'Ahorro', transferencia: 'Transfer.' }
 
   return (
     <div className="page animate-in">
@@ -73,51 +96,49 @@ export default function TransaccionesPage({ refresh }) {
         <p>{monthLabel(anio, mes)} · {txs.length} registros</p>
       </div>
 
-      {/* Búsqueda */}
-      <input className="input" type="search" placeholder="Buscar por concepto u observación..."
+      <input className="input" type="search" placeholder="Buscar movimiento..."
         value={busqueda} onChange={e => setBusqueda(e.target.value)}
         style={{ marginBottom: '0.75rem' }} />
 
-      {/* Filtros */}
       <div style={{ display: 'flex', gap: 6, marginBottom: '0.75rem', overflowX: 'auto', paddingBottom: 2 }}>
         {[
-          { key: 'todos',   label: 'Todos'  },
-          { key: 'gasto',   label: 'Gastos' },
-          { key: 'ingreso', label: 'Ingresos' },
+          { key: 'todos',   label: 'Todos'   },
+          { key: 'gasto',   label: 'Gastos'  },
+          { key: 'ingreso', label: 'Ingresos'},
           { key: 'ahorro',  label: 'Ahorros' },
         ].map(f => (
           <button key={f.key} onClick={() => setFiltro(f.key)}
             style={{
               padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
-              fontFamily: 'var(--font)', fontSize: '0.8rem', fontWeight: 600, whiteSpace: 'nowrap',
+              fontFamily: 'var(--font)', fontSize: '0.8rem', fontWeight: 600,
+              whiteSpace: 'nowrap',
               background: filtro === f.key ? 'var(--accent)' : 'var(--bg3)',
               color: filtro === f.key ? '#fff' : 'var(--text2)',
-              transition: 'all 0.15s',
             }}>
             {f.label}
           </button>
         ))}
       </div>
 
-      {/* Resumen del filtro actual */}
+      {/* Resumen */}
       <div className="card card-sm" style={{ marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
           <span style={{ color: 'var(--text2)', fontSize: '0.82rem' }}>
             {filtered.length} movimiento{filtered.length !== 1 ? 's' : ''}
           </span>
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 10 }}>
             {totales.ingresos > 0 && (
-              <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--green)', fontWeight: 600 }}>
+              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--green)', fontWeight: 600 }}>
                 +{formatCOP(totales.ingresos)}
               </span>
             )}
             {totales.gastos > 0 && (
-              <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--red)', fontWeight: 600 }}>
+              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--red)', fontWeight: 600 }}>
                 -{formatCOP(totales.gastos)}
               </span>
             )}
             {totales.ahorro > 0 && (
-              <span className="mono" style={{ fontSize: '0.82rem', color: 'var(--amber)', fontWeight: 600 }}>
+              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--amber)', fontWeight: 600 }}>
                 ↗{formatCOP(totales.ahorro)}
               </span>
             )}
@@ -134,63 +155,54 @@ export default function TransaccionesPage({ refresh }) {
         <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
           <p style={{ fontSize: '2.5rem', marginBottom: 8 }}>📭</p>
           <p style={{ fontWeight: 500 }}>
-            {txs.length === 0
-              ? 'Sin movimientos este mes'
-              : 'Sin movimientos que coincidan con el filtro'}
+            {txs.length === 0 ? 'Sin movimientos este mes' : 'Sin resultados para este filtro'}
           </p>
           <p style={{ fontSize: '0.82rem', marginTop: 6, color: 'var(--text3)' }}>
-            Usa el botón + para registrar uno
+            Usa el botón + para registrar un movimiento
           </p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          {filtered.map((t, i) => (
-            <div key={t.id} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 16px',
-              borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none',
-            }}>
-              {/* Indicador tipo */}
-              <div style={{
-                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: TIPO_COLORS[t.tipo_movimiento] || 'var(--text3)'
-              }} />
-
-              {/* Info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{
-                  fontSize: '0.9rem', fontWeight: 500,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-                }}>
-                  {t.conceptos?.nombre || t.observaciones || 'Sin concepto'}
-                </p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text2)', marginTop: 1 }}>
-                  {dateLabel(t.fecha)}
-                  {t.conceptos?.categorias?.nombre && ` · ${t.conceptos.categorias.nombre}`}
-                  {t.medio_pago && ` · ${t.medio_pago}`}
-                </p>
-              </div>
-
-              {/* Valor + eliminar */}
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <p className="mono" style={{
-                  fontWeight: 600, fontSize: '0.9rem',
-                  color: TIPO_COLORS[t.tipo_movimiento] || 'var(--text)'
-                }}>
-                  {t.tipo_movimiento === 'gasto' ? '-' : '+'}
-                  {formatCOP(t.valor)}
-                </p>
-                <button onClick={() => deleteTx(t.id)}
-                  style={{
-                    background: 'none', border: 'none', color: 'var(--text3)',
-                    cursor: 'pointer', fontSize: '0.7rem', padding: '2px 0',
-                    lineHeight: 1,
+          {filtered.map((t, i) => {
+            const concepto = conceptoMap[t.concepto_id]
+            const nombre   = concepto?.nombre || t.observaciones || 'Sin concepto'
+            const catNom   = concepto?.categoria || ''
+            return (
+              <div key={t.id} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '12px 16px',
+                borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none',
+              }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: TIPO_COLORS[t.tipo_movimiento] || 'var(--text3)'
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {nombre}
+                  </p>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text2)', marginTop: 1 }}>
+                    {dateLabel(t.fecha)}
+                    {catNom && ` · ${catNom}`}
+                    {t.medio_pago && ` · ${t.medio_pago}`}
+                  </p>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <p className="mono" style={{
+                    fontWeight: 600, fontSize: '0.9rem',
+                    color: TIPO_COLORS[t.tipo_movimiento] || 'var(--text)'
                   }}>
-                  eliminar
-                </button>
+                    {t.tipo_movimiento === 'gasto' ? '-' : '+'}
+                    {formatCOP(t.valor)}
+                  </p>
+                  <button onClick={() => deleteTx(t.id)}
+                    style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 0' }}>
+                    eliminar
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
