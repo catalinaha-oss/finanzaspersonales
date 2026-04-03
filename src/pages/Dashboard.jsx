@@ -34,6 +34,7 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
       { data: txData,    error: txErr   },
       { data: consData,  error: conErr  },
       { data: catsData,  error: catErr  },
+      { data: metasData },
     ] = await Promise.all([
       supabase.from('transacciones')
         .select('id, valor, tipo_movimiento, concepto_id, fecha')
@@ -47,6 +48,10 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
       supabase.from('categorias')
         .select('id, nombre, tipo')
         .eq('user_id', user.id),
+      supabase.from('metas')
+        .select('id, nombre, valor_actual')
+        .eq('user_id', user.id)
+        .eq('activo', true),
     ])
 
     if (txErr || conErr || catErr) {
@@ -62,9 +67,10 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
     for (const c of consData || []) conMap[c.id] = c
 
     // Totales del mes
-    const ingresos = (txData || []).filter(t => t.tipo_movimiento === 'ingreso').reduce((s,t) => s + Number(t.valor), 0)
-    const gastos   = (txData || []).filter(t => t.tipo_movimiento === 'gasto').reduce((s,t) => s + Number(t.valor), 0)
-    const ahorro   = (txData || []).filter(t => t.tipo_movimiento === 'ahorro').reduce((s,t) => s + Number(t.valor), 0)
+    const ingresos       = (txData || []).filter(t => t.tipo_movimiento === 'ingreso').reduce((s,t) => s + Number(t.valor), 0)
+    const gastos         = (txData || []).filter(t => t.tipo_movimiento === 'gasto').reduce((s,t) => s + Number(t.valor), 0)
+    const ahorroMes      = (txData || []).filter(t => t.tipo_movimiento === 'ahorro').reduce((s,t) => s + Number(t.valor), 0)
+    const ahorroAcumulado = (metasData || []).reduce((s,m) => s + Number(m.valor_actual), 0)
 
     // Presupuesto mensualizado por categoría (solo gastos)
     const presupuestoCat = {}
@@ -111,7 +117,7 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
       categorias: catMap[c.categoria_id] || null
     }))
     setAlerts(getUpcomingAlerts(conceptosConCat))
-    setData({ ingresos, gastos, ahorro, flujo: ingresos - gastos - ahorro, catData, presupuestoTotal, desbordados, enRiesgo, bien })
+    setData({ ingresos, gastos, ahorroMes, ahorroAcumulado, flujo: ingresos - gastos, catData, presupuestoTotal, desbordados, enRiesgo, bien })
     setLoading(false)
   }
 
@@ -124,7 +130,7 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
   )
   if (!data) return null
 
-  const { ingresos, gastos, ahorro, flujo, catData, presupuestoTotal, desbordados, enRiesgo, bien } = data
+  const { ingresos, gastos, ahorroMes, ahorroAcumulado, flujo, catData, presupuestoTotal, desbordados, enRiesgo, bien } = data
   const ejecutadoPct = presupuestoTotal > 0 ? Math.min((gastos / presupuestoTotal) * 100, 100) : 0
 
   const catFiltradas = filtro === 'desbordados' ? catData.filter(c => c.pct !== null && c.pct > 100)
@@ -139,17 +145,38 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
         <h1>Resumen financiero</h1>
       </div>
 
-      {/* Flujo */}
-      <div className="card" style={{ marginBottom: '0.75rem', background: flujo >= 0 ? 'rgba(45,212,160,0.08)' : 'rgba(247,95,95,0.08)', borderColor: flujo >= 0 ? 'rgba(45,212,160,0.2)' : 'rgba(247,95,95,0.2)' }}>
-        <p style={{ color: 'var(--text2)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Flujo del mes</p>
-        <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: flujo >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em' }}>
+      {/* Flujo — solo ingresos menos gastos */}
+      <div className="card" style={{ marginBottom: '0.75rem', background: flujo >= 0 ? 'rgba(45,212,160,0.06)' : 'rgba(247,95,95,0.08)', borderColor: flujo >= 0 ? 'rgba(45,212,160,0.2)' : 'rgba(247,95,95,0.2)' }}>
+        <p style={{ color: 'var(--text2)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Flujo del mes</p>
+        <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: flujo >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em', marginBottom: 10 }}>
           {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(flujo)}
         </p>
-        <p style={{ color: 'var(--text2)', fontSize: '0.8rem', marginTop: 4 }}>
-          Ingresos: <strong style={{ color: 'var(--green)' }}>{formatCompact(ingresos)}</strong>
-          {' · '}Gastos: <strong style={{ color: 'var(--red)' }}>{formatCompact(gastos)}</strong>
-          {' · '}Ahorro: <strong style={{ color: 'var(--amber)' }}>{formatCompact(ahorro)}</strong>
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', marginBottom: 10 }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 2 }}>Ingresos</p>
+            <p className="mono" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--green)' }}>+{formatCompact(ingresos)}</p>
+          </div>
+          <span style={{ color: 'var(--text3)', fontSize: '1rem' }}>−</span>
+          <div style={{ textAlign: 'right' }}>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 2 }}>Gastos</p>
+            <p className="mono" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--red)' }}>{formatCompact(gastos)}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Ahorro — acumulado + aporte del mes */}
+      <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(247,180,79,0.05)', borderColor: 'rgba(247,180,79,0.2)' }}>
+        <p style={{ color: 'var(--text2)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Ahorro</p>
+        <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--amber)', letterSpacing: '-0.02em', marginBottom: 2 }}>
+          {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(ahorroAcumulado)}
         </p>
+        <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 10 }}>Total acumulado en metas</p>
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', marginBottom: 10 }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>Aportado este mes</p>
+          <p className="mono" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--amber)' }}>+{formatCompact(ahorroMes)}</p>
+        </div>
       </div>
 
       {/* Presupuesto total */}
