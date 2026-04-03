@@ -100,17 +100,23 @@ export default function ConfigPage() {
   }
 
   async function eliminarCat(cat) {
-    // 1. Verificar tx directas de la categoría
-    const nTx = txCats[cat.id] || 0
-    if (nTx > 0) {
-      alert(`Esta categoría tiene ${nTx} movimiento(s) registrados. No se puede eliminar.`)
-      return
-    }
-    // 2. Verificar conceptos activos
+    // 1. Verificar conceptos activos
     const consDeCat = conceptos.filter(c => c.categoria_id === cat.id && c.activo)
     if (consDeCat.length > 0) {
       alert(`Esta categoría tiene ${consDeCat.length} concepto(s) activo(s). Primero elimínalos.`)
       return
+    }
+    // 2. Query directa filtrando por user_id — garantiza que son movimientos del usuario
+    const idsDeCat = conceptos.filter(c => c.categoria_id === cat.id).map(c => c.id)
+    if (idsDeCat.length > 0) {
+      const { count } = await supabase.from('transacciones')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .in('concepto_id', idsDeCat)
+      if (count > 0) {
+        alert(`Esta categoría tiene ${count} movimiento(s) registrados. No se puede eliminar.`)
+        return
+      }
     }
     if (!confirm(`¿Eliminar la categoría "${cat.nombre}"?`)) return
     const { error } = await supabase.from('categorias').delete().eq('id', cat.id).eq('user_id', user.id)
@@ -173,9 +179,13 @@ export default function ConfigPage() {
   }
 
   async function eliminarCon(con) {
-    const nTx = txConceptos[con.id] || 0
-    if (nTx > 0) {
-      alert(`Este concepto tiene ${nTx} movimiento(s) registrados. No se puede eliminar.`)
+    // Query directa con user_id — valida que los movimientos son del usuario actual
+    const { count } = await supabase.from('transacciones')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('concepto_id', con.id)
+    if (count > 0) {
+      alert(`Este concepto tiene ${count} movimiento(s) registrados. No se puede eliminar.`)
       return
     }
     if (!confirm(`¿Eliminar el concepto "${con.nombre}"?`)) return
