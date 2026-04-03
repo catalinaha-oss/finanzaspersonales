@@ -12,7 +12,7 @@ function getPctColor(pct) {
   return '#2dd4a0'
 }
 
-export default function Dashboard({ refresh }) {
+export default function Dashboard({ refresh, onRegistrarPago }) {
   const { user }  = useAuth()
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
@@ -171,18 +171,45 @@ export default function Dashboard({ refresh }) {
       {/* Alertas */}
       {alerts.length > 0 && (
         <div className="card" style={{ marginBottom: '0.75rem', borderColor: 'rgba(247,180,79,0.25)', background: 'rgba(247,180,79,0.06)' }}>
-          <p style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--amber)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <p style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--amber)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/>
             </svg>
             {alerts.length} pago{alerts.length > 1 ? 's' : ''} próximo{alerts.length > 1 ? 's' : ''}
           </p>
-          {alerts.slice(0, 3).map((a, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: i < Math.min(alerts.length,3)-1 ? '1px solid var(--border)' : 'none' }}>
-              <span style={{ fontSize: '0.85rem' }}>{a.concepto.nombre}</span>
-              <span style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 600 }}>
-                {a.dias === 0 ? 'Hoy' : a.dias === 1 ? 'Mañana' : `En ${a.dias} días`}
-              </span>
+          {alerts.slice(0, 5).map((a, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 0',
+              borderBottom: i < Math.min(alerts.length,5)-1 ? '1px solid var(--border)' : 'none'
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {a.concepto.nombre}
+                </p>
+                <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginTop: 1 }}>
+                  {a.dias === 0 ? 'Hoy' : a.dias === 1 ? 'Mañana' : `En ${a.dias} días`}
+                  {a.concepto.monto_presupuestado ? ` · $${Number(a.concepto.monto_presupuestado).toLocaleString('es-CO')}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => onRegistrarPago?.({
+                  tipo_movimiento: 'gasto',
+                  concepto_id: a.concepto.id,
+                  categoria_id: a.concepto.categoria_id,
+                  monto_presupuestado: a.concepto.monto_presupuestado,
+                  nombre: a.concepto.nombre,
+                })}
+                style={{
+                  flexShrink: 0, padding: '5px 10px', borderRadius: 6,
+                  border: '1px solid rgba(247,180,79,0.4)',
+                  background: 'rgba(247,180,79,0.1)', color: 'var(--amber)',
+                  fontFamily: 'var(--font)', fontSize: '0.75rem', fontWeight: 600,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  transition: 'background 0.15s',
+                }}>
+                Registrar ›
+              </button>
             </div>
           ))}
         </div>

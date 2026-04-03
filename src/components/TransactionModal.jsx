@@ -3,26 +3,29 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { today } from '../lib/utils'
 
-export default function TransactionModal({ onClose, onSaved }) {
+// prefill: { tipo_movimiento, concepto_id, categoria_id, monto_presupuestado, nombre }
+export default function TransactionModal({ onClose, onSaved, prefill }) {
   const { user } = useAuth()
-  const [categorias, setCategorias]   = useState([])
-  const [conceptos, setConceptos]     = useState([])
-  const [metas, setMetas]             = useState([])
-  const [catFilter, setCatFilter]     = useState('')
-  const [tipo, setTipo]               = useState('gasto')
+  const [categorias, setCategorias] = useState([])
+  const [conceptos,  setConceptos]  = useState([])
+  const [metas,      setMetas]      = useState([])
+  const [catFilter,  setCatFilter]  = useState(prefill?.categoria_id || '')
+  const [tipo,       setTipo]       = useState(prefill?.tipo_movimiento || 'gasto')
   const [form, setForm] = useState({
-    concepto_id: '', meta_id: '', fecha: today(),
-    valor: '', medio_pago: 'débito', observaciones: ''
+    concepto_id:    prefill?.concepto_id || '',
+    meta_id:        '',
+    fecha:          today(),
+    valor:          prefill?.monto_presupuestado ? String(Math.round(prefill.monto_presupuestado)) : '',
+    medio_pago:     'débito',
+    observaciones:  '',
   })
   const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState('')
+  const [error,  setError]  = useState('')
+  const [ready,  setReady]  = useState(false)
 
   useEffect(() => {
     async function load() {
-      // SOLUCIÓN RLS: queries simples sin joins anidados entre tablas con RLS
-      const [{ data: cats, error: e1 },
-             { data: cons, error: e2 },
-             { data: mts,  error: e3 }] = await Promise.all([
+      const [{ data: cats }, { data: cons }, { data: mts }] = await Promise.all([
         supabase.from('categorias').select('id, nombre, tipo, orden')
           .eq('user_id', user.id).order('nombre'),
         supabase.from('conceptos').select('id, nombre, categoria_id')
@@ -30,39 +33,28 @@ export default function TransactionModal({ onClose, onSaved }) {
         supabase.from('metas').select('id, nombre, valor_actual, valor_meta')
           .eq('user_id', user.id).eq('activo', true).order('nombre'),
       ])
-
-      if (e1) console.error('Error cargando categorías:', e1)
-      if (e2) console.error('Error cargando conceptos:', e2)
-      if (e3) console.error('Error cargando metas:', e3)
-
       setCategorias(cats || [])
       setConceptos(cons || [])
       setMetas(mts || [])
+      setReady(true)
     }
     load()
   }, [user.id])
 
-  // Mapa de categorías para lookup rápido: id → {nombre, tipo}
+  // Mapa local: id → categoría
   const catMap = {}
   for (const c of categorias) catMap[c.id] = c
 
-  // Filtrar categorías según tipo de movimiento (lookup local, sin join)
-  const categoriasFiltradas = categorias.filter(c => {
-    if (tipo === 'ingreso') return c.tipo === 'Ingreso'
-    if (tipo === 'gasto')   return c.tipo === 'Gasto'
-    return false
-  })
+  const categoriasFiltradas = categorias.filter(c =>
+    tipo === 'ingreso' ? c.tipo === 'Ingreso' : c.tipo === 'Gasto'
+  )
 
-  // Filtrar conceptos usando catMap local — sin depender de joins
   const conceptosFiltrados = conceptos.filter(c => {
     const cat = catMap[c.categoria_id]
     if (!cat) return false
-    // Filtrar por tipo de movimiento
     const matchTipo = tipo === 'ingreso' ? cat.tipo === 'Ingreso' : cat.tipo === 'Gasto'
     if (!matchTipo) return false
-    // Filtrar por categoría seleccionada
-    if (catFilter) return c.categoria_id === catFilter
-    return true
+    return !catFilter || c.categoria_id === catFilter
   })
 
   function cambiarTipo(nuevoTipo) {
@@ -100,38 +92,27 @@ export default function TransactionModal({ onClose, onSaved }) {
     if (tipo === 'ahorro') {
       const meta = metas.find(m => m.id === form.meta_id)
       const { error: txErr } = await supabase.from('transacciones').insert({
-        user_id: user.id,
-        fecha: form.fecha,
-        valor: valorNum,
-        tipo_movimiento: 'ahorro',
-        medio_pago: form.medio_pago || null,
+        user_id: user.id, fecha: form.fecha, valor: valorNum,
+        tipo_movimiento: 'ahorro', medio_pago: form.medio_pago || null,
         observaciones: form.observaciones || meta?.nombre || 'Ahorro',
-        origen: 'manual',
-        concepto_id: null,
+        origen: 'manual', concepto_id: null,
       })
-      if (txErr) { setSaving(false); setError('Error al guardar: ' + txErr.message); return }
-
-      // Actualizar valor_actual de la meta
+      if (txErr) { setSaving(false); setError('Error: ' + txErr.message); return }
       await supabase.from('metas')
         .update({ valor_actual: Number(meta.valor_actual) + valorNum, updated_at: new Date().toISOString() })
         .eq('id', meta.id).eq('user_id', user.id)
-
       setSaving(false); onSaved?.(); onClose(); return
     }
 
-    // Gasto o Ingreso
     const { error: err } = await supabase.from('transacciones').insert({
-      user_id: user.id,
-      fecha: form.fecha,
-      valor: valorNum,
-      tipo_movimiento: tipo,
-      concepto_id: form.concepto_id,
+      user_id: user.id, fecha: form.fecha, valor: valorNum,
+      tipo_movimiento: tipo, concepto_id: form.concepto_id,
       medio_pago: form.medio_pago || null,
       observaciones: form.observaciones || null,
       origen: 'manual',
     })
     setSaving(false)
-    if (err) { setError('Error al guardar: ' + err.message); return }
+    if (err) { setError('Error: ' + err.message); return }
     onSaved?.(); onClose()
   }
 
@@ -145,9 +126,16 @@ export default function TransactionModal({ onClose, onSaved }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-handle" />
-        <h2>Registrar movimiento</h2>
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+        <h2>
+          {prefill ? `Registrar: ${prefill.nombre}` : 'Registrar movimiento'}
+        </h2>
+        {prefill && (
+          <p style={{ fontSize: '0.82rem', color: 'var(--text2)', marginBottom: '0.75rem', marginTop: '-0.5rem' }}>
+            Revisa los datos y confirma el pago
+          </p>
+        )}
 
+        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           {/* Tipo */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
             {TIPOS.map(t => (
@@ -179,7 +167,7 @@ export default function TransactionModal({ onClose, onSaved }) {
               <label>Meta de ahorro *</label>
               {metas.length === 0 ? (
                 <p style={{ fontSize: '0.85rem', color: 'var(--amber)', padding: '0.4rem 0' }}>
-                  No tienes metas creadas. Ve a la sección Metas para crear una.
+                  No tienes metas creadas. Ve a la sección Metas.
                 </p>
               ) : (
                 <select className="input" value={form.meta_id}
@@ -210,10 +198,11 @@ export default function TransactionModal({ onClose, onSaved }) {
               </div>
 
               <div className="input-group">
-                <label>Concepto *
-                  {conceptosFiltrados.length > 0 && (
+                <label>
+                  Concepto *
+                  {ready && conceptosFiltrados.length > 0 && (
                     <span style={{ color: 'var(--text3)', fontWeight: 400, marginLeft: 6 }}>
-                      ({conceptosFiltrados.length} disponibles)
+                      ({conceptosFiltrados.length})
                     </span>
                   )}
                 </label>
@@ -223,17 +212,13 @@ export default function TransactionModal({ onClose, onSaved }) {
                   <option value="">— Selecciona un concepto —</option>
                   {conceptosFiltrados.map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.nombre}
-                      {!catFilter && catMap[c.categoria_id]
-                        ? ` · ${catMap[c.categoria_id].nombre}` : ''}
+                      {c.nombre}{!catFilter && catMap[c.categoria_id] ? ` · ${catMap[c.categoria_id].nombre}` : ''}
                     </option>
                   ))}
                 </select>
-                {conceptosFiltrados.length === 0 && (
+                {ready && conceptosFiltrados.length === 0 && (
                   <p style={{ fontSize: '0.78rem', color: 'var(--text3)', marginTop: 2 }}>
-                    {catFilter
-                      ? 'Esta categoría no tiene conceptos activos.'
-                      : 'No hay conceptos para este tipo de movimiento.'}
+                    {catFilter ? 'Esta categoría no tiene conceptos activos.' : 'Sin conceptos para este tipo.'}
                   </p>
                 )}
               </div>
@@ -278,7 +263,7 @@ export default function TransactionModal({ onClose, onSaved }) {
               onClick={onClose} style={{ justifyContent: 'center' }}>Cancelar</button>
             <button type="submit" className="btn btn-primary w-full"
               disabled={saving} style={{ justifyContent: 'center' }}>
-              {saving ? 'Guardando...' : 'Guardar'}
+              {saving ? 'Guardando...' : prefill ? 'Confirmar pago' : 'Guardar'}
             </button>
           </div>
         </form>

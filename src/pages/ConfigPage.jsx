@@ -4,110 +4,226 @@ import { useAuth } from '../hooks/useAuth'
 
 const TIPOS = ['Ingreso', 'Gasto', 'Ahorro/Inversión']
 const TIPO_COLORS = {
-  'Ingreso': 'var(--green)',
-  'Gasto': 'var(--red)',
+  'Ingreso':          'var(--green)',
+  'Gasto':            'var(--red)',
   'Ahorro/Inversión': 'var(--amber)'
 }
+const PERIODICIDADES = ['Mensual','Bimensual','Trimestral','Semestral','Anual']
 
 export default function ConfigPage() {
   const { user, signOut } = useAuth()
-  const [categorias, setCategorias]   = useState([])
-  const [conteoConceptos, setConteo]  = useState({})  // catId → count
-  const [loading, setLoading]         = useState(true)
-  const [showModal, setShowModal]     = useState(false)
-  const [editando, setEditando]       = useState(null)
-  const [form, setForm]   = useState({ nombre: '', tipo: 'Gasto' })
+
+  // Datos
+  const [categorias, setCategorias]     = useState([])
+  const [conceptos,  setConceptos]      = useState([])
+  const [txConceptos, setTxConceptos]   = useState({}) // concepto_id → count tx
+  const [txCats,      setTxCats]        = useState({}) // cat_id → count tx
+  const [loading, setLoading]           = useState(true)
+  const [errorMsg, setErrorMsg]         = useState('')
+
+  // Vista: 'categorias' | 'conceptos'
+  const [vista, setVista]         = useState('categorias')
+  const [catSeleccionada, setCatSel] = useState(null) // { id, nombre, tipo }
+
+  // Modales
+  const [modalCat, setModalCat]   = useState(false)
+  const [modalCon, setModalCon]   = useState(false)
+  const [editandoCat, setEditCat] = useState(null)
+  const [editandoCon, setEditCon] = useState(null)
+
+  // Forms
+  const [formCat, setFormCat] = useState({ nombre: '', tipo: 'Gasto' })
+  const [formCon, setFormCon] = useState({
+    nombre: '', esencial: 'E', fijo_variable: 'F',
+    periodicidad: 'Mensual', monto_presupuestado: '',
+    dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: ''
+  })
   const [saving, setSaving] = useState(false)
-  const [errorMsg, setErrorMsg] = useState('')
 
   async function load() {
-    setLoading(true)
-    setErrorMsg('')
-
-    // SOLUCIÓN: queries planas sin joins anidados (evita problemas RLS)
-    const [{ data: cats, error: catErr }, { data: cons, error: conErr }] = await Promise.all([
-      supabase.from('categorias')
-        .select('id, tipo, nombre, orden')
-        .eq('user_id', user.id)
-        .order('tipo').order('nombre'),
+    setLoading(true); setErrorMsg('')
+    const [
+      { data: cats,  error: e1 },
+      { data: cons,  error: e2 },
+      { data: txs,   error: e3 },
+    ] = await Promise.all([
+      supabase.from('categorias').select('id, tipo, nombre, orden')
+        .eq('user_id', user.id).order('tipo').order('nombre'),
       supabase.from('conceptos')
-        .select('id, categoria_id')
-        .eq('user_id', user.id)
-        .eq('activo', true),
+        .select('id, nombre, categoria_id, esencial, fijo_variable, periodicidad, monto_presupuestado, dia_pago, mes_ciclo, dia_vencimiento, activo')
+        .eq('user_id', user.id).order('nombre'),
+      supabase.from('transacciones').select('concepto_id')
+        .eq('user_id', user.id).not('concepto_id', 'is', null),
     ])
+    if (e1) { setErrorMsg('Error: ' + e1.message); setLoading(false); return }
 
-    if (catErr) { setErrorMsg('Error cargando categorías: ' + catErr.message); setLoading(false); return }
-    if (conErr) console.warn('Error cargando conceptos:', conErr.message)
+    // Contar tx por concepto
+    const txCon = {}
+    for (const t of txs || []) {
+      if (t.concepto_id) txCon[t.concepto_id] = (txCon[t.concepto_id] || 0) + 1
+    }
 
-    // Contar conceptos por categoría localmente
-    const conteo = {}
+    // Contar tx por categoría (a través de conceptos)
+    const txCat = {}
     for (const c of cons || []) {
-      conteo[c.categoria_id] = (conteo[c.categoria_id] || 0) + 1
+      if (txCon[c.id]) txCat[c.categoria_id] = (txCat[c.categoria_id] || 0) + txCon[c.id]
     }
 
     setCategorias(cats || [])
-    setConteo(conteo)
+    setConceptos(cons || [])
+    setTxConceptos(txCon)
+    setTxCats(txCat)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [user.id])
 
-  function abrirNueva() {
-    setEditando(null)
-    setForm({ nombre: '', tipo: 'Gasto' })
-    setShowModal(true)
+  // ── CATEGORÍAS ─────────────────────────────────────────────
+  function abrirNuevaCat() {
+    setEditCat(null); setFormCat({ nombre: '', tipo: 'Gasto' }); setModalCat(true)
+  }
+  function abrirEditarCat(cat) {
+    setEditCat(cat.id); setFormCat({ nombre: cat.nombre, tipo: cat.tipo }); setModalCat(true)
   }
 
-  function abrirEditar(cat) {
-    setEditando(cat.id)
-    setForm({ nombre: cat.nombre, tipo: cat.tipo })
-    setShowModal(true)
-  }
-
-  async function guardar(e) {
+  async function guardarCat(e) {
     e.preventDefault()
-    if (!form.nombre.trim()) return
+    if (!formCat.nombre.trim()) return
     setSaving(true)
-    if (editando) {
-      const { error } = await supabase.from('categorias')
-        .update({ nombre: form.nombre.trim(), tipo: form.tipo })
-        .eq('id', editando).eq('user_id', user.id)
-      if (error) { setSaving(false); alert('Error: ' + error.message); return }
-    } else {
-      const { error } = await supabase.from('categorias')
-        .insert({ user_id: user.id, nombre: form.nombre.trim(), tipo: form.tipo, orden: categorias.length })
-      if (error) { setSaving(false); alert('Error: ' + error.message); return }
-    }
+    const payload = { nombre: formCat.nombre.trim(), tipo: formCat.tipo }
+    const { error } = editandoCat
+      ? await supabase.from('categorias').update(payload).eq('id', editandoCat).eq('user_id', user.id)
+      : await supabase.from('categorias').insert({ ...payload, user_id: user.id, orden: categorias.length })
     setSaving(false)
-    setShowModal(false)
-    load()
+    if (error) { alert('Error: ' + error.message); return }
+    setModalCat(false); load()
   }
 
-  async function eliminar(id) {
-    const nConceptos = conteoConceptos[id] || 0
-    if (nConceptos > 0) {
-      alert(`Esta categoría tiene ${nConceptos} concepto(s) activo(s). Primero desactívalos.`)
+  async function eliminarCat(cat) {
+    // 1. Verificar tx directas de la categoría
+    const nTx = txCats[cat.id] || 0
+    if (nTx > 0) {
+      alert(`Esta categoría tiene ${nTx} movimiento(s) registrados. No se puede eliminar.`)
       return
     }
-    if (!confirm('¿Eliminar esta categoría?')) return
-    const { error } = await supabase.from('categorias')
-      .delete().eq('id', id).eq('user_id', user.id)
-    if (error) { alert('Error al eliminar: ' + error.message); return }
+    // 2. Verificar conceptos activos
+    const consDeCat = conceptos.filter(c => c.categoria_id === cat.id && c.activo)
+    if (consDeCat.length > 0) {
+      alert(`Esta categoría tiene ${consDeCat.length} concepto(s) activo(s). Primero elimínalos.`)
+      return
+    }
+    if (!confirm(`¿Eliminar la categoría "${cat.nombre}"?`)) return
+    const { error } = await supabase.from('categorias').delete().eq('id', cat.id).eq('user_id', user.id)
+    if (error) { alert('Error: ' + error.message); return }
     load()
   }
 
+  // ── CONCEPTOS ──────────────────────────────────────────────
+  function abrirConceptos(cat) {
+    setCatSel(cat); setVista('conceptos')
+  }
+
+  function abrirNuevoCon() {
+    setEditCon(null)
+    setFormCon({
+      nombre: '', esencial: 'E', fijo_variable: 'F',
+      periodicidad: 'Mensual', monto_presupuestado: '',
+      dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: ''
+    })
+    setModalCon(true)
+  }
+
+  function abrirEditarCon(con) {
+    setEditCon(con.id)
+    setFormCon({
+      nombre:              con.nombre || '',
+      esencial:            con.esencial || 'E',
+      fijo_variable:       con.fijo_variable || 'F',
+      periodicidad:        con.periodicidad || 'Mensual',
+      monto_presupuestado: con.monto_presupuestado ? String(con.monto_presupuestado) : '',
+      dia_pago:            con.dia_pago ? String(con.dia_pago) : '',
+      mes_ciclo:           con.mes_ciclo ? String(con.mes_ciclo) : '',
+      dia_vencimiento:     con.dia_vencimiento ? String(con.dia_vencimiento) : '',
+      observaciones:       con.observaciones || '',
+    })
+    setModalCon(true)
+  }
+
+  async function guardarCon(e) {
+    e.preventDefault()
+    if (!formCon.nombre.trim() || !catSeleccionada) return
+    setSaving(true)
+    const payload = {
+      nombre:              formCon.nombre.trim(),
+      esencial:            formCon.esencial,
+      fijo_variable:       formCon.fijo_variable,
+      periodicidad:        formCon.periodicidad,
+      monto_presupuestado: formCon.monto_presupuestado ? parseFloat(formCon.monto_presupuestado) : null,
+      dia_pago:            formCon.dia_pago ? parseInt(formCon.dia_pago) : null,
+      mes_ciclo:           formCon.mes_ciclo ? parseInt(formCon.mes_ciclo) : null,
+      dia_vencimiento:     formCon.dia_vencimiento ? parseInt(formCon.dia_vencimiento) : null,
+      observaciones:       formCon.observaciones || null,
+    }
+    const { error } = editandoCon
+      ? await supabase.from('conceptos').update(payload).eq('id', editandoCon).eq('user_id', user.id)
+      : await supabase.from('conceptos').insert({ ...payload, user_id: user.id, categoria_id: catSeleccionada.id, activo: true })
+    setSaving(false)
+    if (error) { alert('Error: ' + error.message); return }
+    setModalCon(false); load()
+  }
+
+  async function eliminarCon(con) {
+    const nTx = txConceptos[con.id] || 0
+    if (nTx > 0) {
+      alert(`Este concepto tiene ${nTx} movimiento(s) registrados. No se puede eliminar.`)
+      return
+    }
+    if (!confirm(`¿Eliminar el concepto "${con.nombre}"?`)) return
+    const { error } = await supabase.from('conceptos').delete().eq('id', con.id).eq('user_id', user.id)
+    if (error) { alert('Error: ' + error.message); return }
+    load()
+  }
+
+  async function toggleActivo(con) {
+    await supabase.from('conceptos').update({ activo: !con.activo }).eq('id', con.id).eq('user_id', user.id)
+    load()
+  }
+
+  // ── Renders ────────────────────────────────────────────────
   const porTipo = TIPOS.map(tipo => ({
     tipo, cats: categorias.filter(c => c.tipo === tipo)
   })).filter(g => g.cats.length > 0)
 
+  const conceptosDeCat = catSeleccionada
+    ? conceptos.filter(c => c.categoria_id === catSeleccionada.id)
+    : []
+
+  const labelFecha = (con) => {
+    if (con.fijo_variable !== 'F') return null
+    if (con.periodicidad === 'Mensual' && con.dia_pago) return `Día ${con.dia_pago} c/mes`
+    if (con.mes_ciclo && con.dia_vencimiento) return `Mes ${con.mes_ciclo} día ${con.dia_vencimiento}`
+    return null
+  }
+
   return (
     <div className="page animate-in">
-      <div className="page-header flex justify-between items-center">
-        <div>
-          <h1>Configuración</h1>
-          <p>{categorias.length} categoría{categorias.length !== 1 ? 's' : ''}</p>
-        </div>
-        <button className="btn btn-primary btn-sm" onClick={abrirNueva}>+ Categoría</button>
+      {/* Header con breadcrumb */}
+      <div className="page-header">
+        {vista === 'conceptos' ? (
+          <div>
+            <button onClick={() => setVista('categorias')}
+              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>
+              ← Categorías
+            </button>
+            <h1 style={{ fontSize: '1.3rem' }}>{catSeleccionada?.nombre}</h1>
+            <p>{conceptosDeCat.length} concepto{conceptosDeCat.length !== 1 ? 's' : ''}</p>
+          </div>
+        ) : (
+          <div>
+            <h1>Configuración</h1>
+            <p>{categorias.length} categorías</p>
+          </div>
+        )}
       </div>
 
       {errorMsg && (
@@ -116,91 +232,283 @@ export default function ConfigPage() {
         </div>
       )}
 
-      {loading ? (
-        [1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 52, marginBottom: 8, borderRadius: 10 }} />)
-      ) : categorias.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
-          <p style={{ marginBottom: 12 }}>No tienes categorías aún</p>
-          <button className="btn btn-primary" onClick={abrirNueva}>Crear primera categoría</button>
-        </div>
-      ) : (
-        porTipo.map(({ tipo, cats }) => (
-          <div key={tipo} style={{ marginBottom: '1.25rem' }}>
-            <p style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: TIPO_COLORS[tipo], marginBottom: 8, paddingLeft: 2 }}>
-              {tipo} · {cats.length}
-            </p>
+      {/* ── VISTA: CATEGORÍAS ── */}
+      {vista === 'categorias' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+            <button className="btn btn-primary btn-sm" onClick={abrirNuevaCat}>+ Categoría</button>
+          </div>
+
+          {loading ? (
+            [1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 52, marginBottom: 8, borderRadius: 10 }} />)
+          ) : categorias.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
+              <p style={{ marginBottom: 12 }}>No tienes categorías aún</p>
+              <button className="btn btn-primary" onClick={abrirNuevaCat}>Crear primera categoría</button>
+            </div>
+          ) : porTipo.map(({ tipo, cats }) => (
+            <div key={tipo} style={{ marginBottom: '1.25rem' }}>
+              <p style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: TIPO_COLORS[tipo], marginBottom: 8, paddingLeft: 2 }}>
+                {tipo} · {cats.length}
+              </p>
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                {cats.map((cat, i) => {
+                  const nCon  = conceptos.filter(c => c.categoria_id === cat.id).length
+                  const nTx   = txCats[cat.id] || 0
+                  const puedeBorrar = nTx === 0 && conceptos.filter(c => c.categoria_id === cat.id && c.activo).length === 0
+                  return (
+                    <div key={cat.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '11px 14px',
+                      borderBottom: i < cats.length - 1 ? '1px solid var(--border)' : 'none'
+                    }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: TIPO_COLORS[tipo], flexShrink: 0 }} />
+                      {/* Nombre — clic para ver conceptos */}
+                      <button onClick={() => abrirConceptos(cat)}
+                        style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, fontFamily: 'var(--font)' }}>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text)' }}>{cat.nombre}</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text3)', marginLeft: 8 }}>
+                          {nCon} concepto{nCon !== 1 ? 's' : ''}{nTx > 0 ? ` · ${nTx} mov.` : ''}
+                        </span>
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => abrirEditarCat(cat)}
+                        style={{ padding: '3px 10px', fontSize: '0.78rem', flexShrink: 0 }}>
+                        Editar
+                      </button>
+                      <button onClick={() => eliminarCat(cat)}
+                        title={puedeBorrar ? 'Eliminar' : 'Tiene movimientos o conceptos activos'}
+                        style={{
+                          background: 'none', border: 'none', cursor: puedeBorrar ? 'pointer' : 'not-allowed',
+                          color: puedeBorrar ? 'var(--text3)' : 'var(--bg4)',
+                          fontSize: '1.1rem', padding: '2px 4px', lineHeight: 1, flexShrink: 0
+                        }}>
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+
+          {/* Cuenta */}
+          <div className="divider" />
+          <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Cuenta</h2>
+          <div className="card" style={{ marginBottom: '0.75rem' }}>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 3 }}>Usuario activo</p>
+            <p style={{ fontFamily: 'var(--mono)', fontSize: '0.875rem' }}>{user.email}</p>
+          </div>
+          <button className="btn btn-ghost w-full" onClick={signOut}
+            style={{ justifyContent: 'center', color: 'var(--red)', borderColor: 'rgba(247,95,95,0.3)' }}>
+            Cerrar sesión
+          </button>
+        </>
+      )}
+
+      {/* ── VISTA: CONCEPTOS ── */}
+      {vista === 'conceptos' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+            <button className="btn btn-primary btn-sm" onClick={abrirNuevoCon}>+ Concepto</button>
+          </div>
+
+          {loading ? (
+            [1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 60, marginBottom: 8, borderRadius: 10 }} />)
+          ) : conceptosDeCat.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
+              <p style={{ marginBottom: 12 }}>Esta categoría no tiene conceptos</p>
+              <button className="btn btn-primary" onClick={abrirNuevoCon}>Crear primer concepto</button>
+            </div>
+          ) : (
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              {cats.map((cat, i) => {
-                const nCon = conteoConceptos[cat.id] || 0
+              {conceptosDeCat.map((con, i) => {
+                const nTx    = txConceptos[con.id] || 0
+                const fecha  = labelFecha(con)
+                const puedeBorrar = nTx === 0
                 return (
-                  <div key={cat.id} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '12px 16px',
-                    borderBottom: i < cats.length - 1 ? '1px solid var(--border)' : 'none'
+                  <div key={con.id} style={{
+                    padding: '11px 14px',
+                    borderBottom: i < conceptosDeCat.length - 1 ? '1px solid var(--border)' : 'none',
+                    opacity: con.activo ? 1 : 0.5,
                   }}>
-                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: TIPO_COLORS[tipo], flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: '0.9rem', fontWeight: 500 }}>{cat.nombre}</span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text3)', marginRight: 4 }}>
-                      {nCon > 0 ? `${nCon} conceptos` : 'Sin conceptos'}
-                    </span>
-                    <button className="btn btn-ghost btn-sm"
-                      onClick={() => abrirEditar(cat)}
-                      style={{ padding: '3px 10px', fontSize: '0.78rem' }}>
-                      Editar
-                    </button>
-                    <button onClick={() => eliminar(cat.id)}
-                      style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '1.1rem', padding: '2px 4px', lineHeight: 1 }}>
-                      ×
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{con.nombre}</span>
+                          {!con.activo && <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text3)' }}>inactivo</span>}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <span className={`badge ${con.esencial === 'E' ? 'badge-blue' : 'badge-purple'}`}>{con.esencial}</span>
+                          <span className={`badge ${con.fijo_variable === 'F' ? 'badge-green' : 'badge-amber'}`}>{con.fijo_variable === 'F' ? 'Fijo' : 'Variable'}</span>
+                          <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>{con.periodicidad}</span>
+                          {con.monto_presupuestado && (
+                            <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>
+                              ${Number(con.monto_presupuestado).toLocaleString('es-CO')}
+                            </span>
+                          )}
+                          {fecha && (
+                            <span className="badge" style={{ background: 'rgba(247,180,79,0.12)', color: 'var(--amber)' }}>{fecha}</span>
+                          )}
+                          {nTx > 0 && (
+                            <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text3)' }}>{nTx} mov.</span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditarCon(con)}
+                          style={{ padding: '3px 8px', fontSize: '0.75rem' }}>Editar</button>
+                        <button onClick={() => toggleActivo(con)}
+                          title={con.activo ? 'Desactivar' : 'Activar'}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: '0.75rem', padding: '3px 4px' }}>
+                          {con.activo ? '⏸' : '▶'}
+                        </button>
+                        <button onClick={() => eliminarCon(con)}
+                          title={puedeBorrar ? 'Eliminar' : `${nTx} movimientos registrados`}
+                          style={{
+                            background: 'none', border: 'none',
+                            cursor: puedeBorrar ? 'pointer' : 'not-allowed',
+                            color: puedeBorrar ? 'var(--text3)' : 'var(--bg4)',
+                            fontSize: '1.1rem', padding: '2px 4px', lineHeight: 1
+                          }}>×</button>
+                      </div>
+                    </div>
                   </div>
                 )
               })}
             </div>
-          </div>
-        ))
+          )}
+        </>
       )}
 
-      {/* Cuenta */}
-      <div className="divider" />
-      <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Cuenta</h2>
-      <div className="card" style={{ marginBottom: '0.75rem' }}>
-        <p style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 3 }}>Usuario activo</p>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: '0.875rem' }}>{user.email}</p>
-      </div>
-      <button className="btn btn-ghost w-full" onClick={signOut}
-        style={{ justifyContent: 'center', color: 'var(--red)', borderColor: 'rgba(247,95,95,0.3)' }}>
-        Cerrar sesión
-      </button>
-
-      {/* Modal */}
-      {showModal && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+      {/* ── MODAL CATEGORÍA ── */}
+      {modalCat && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModalCat(false)}>
           <div className="modal">
             <div className="modal-handle" />
-            <h2>{editando ? 'Editar categoría' : 'Nueva categoría'}</h2>
-            <form onSubmit={guardar} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h2>{editandoCat ? 'Editar categoría' : 'Nueva categoría'}</h2>
+            <form onSubmit={guardarCat} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="input-group">
                 <label>Nombre</label>
                 <input className="input" required placeholder="Ej: Salud, Gym, Mascota..."
-                  value={form.nombre}
-                  onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))}
-                  autoFocus />
+                  value={formCat.nombre} onChange={e => setFormCat(p => ({ ...p, nombre: e.target.value }))} autoFocus />
               </div>
               <div className="input-group">
                 <label>Tipo</label>
-                <select className="input" value={form.tipo}
-                  onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))}>
+                <select className="input" value={formCat.tipo}
+                  onChange={e => setFormCat(p => ({ ...p, tipo: e.target.value }))}>
                   {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="btn btn-ghost w-full"
-                  style={{ justifyContent: 'center' }}
-                  onClick={() => setShowModal(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary w-full"
-                  style={{ justifyContent: 'center' }} disabled={saving}>
-                  {saving ? 'Guardando...' : editando ? 'Actualizar' : 'Crear'}
-                </button>
+                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }}
+                  onClick={() => setModalCat(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }}
+                  disabled={saving}>{saving ? 'Guardando...' : editandoCat ? 'Actualizar' : 'Crear'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CONCEPTO ── */}
+      {modalCon && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModalCon(false)}>
+          <div className="modal">
+            <div className="modal-handle" />
+            <h2>{editandoCon ? 'Editar concepto' : `Nuevo concepto · ${catSeleccionada?.nombre}`}</h2>
+            <form onSubmit={guardarCon} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+
+              <div className="input-group">
+                <label>Nombre</label>
+                <input className="input" required placeholder="Ej: Arriendo, Mercado, Netflix..."
+                  value={formCon.nombre} onChange={e => setFormCon(p => ({ ...p, nombre: e.target.value }))} autoFocus />
+              </div>
+
+              <div className="grid-2">
+                <div className="input-group">
+                  <label>Esencial / No esencial</label>
+                  <select className="input" value={formCon.esencial}
+                    onChange={e => setFormCon(p => ({ ...p, esencial: e.target.value }))}>
+                    <option value="E">E — Esencial</option>
+                    <option value="NE">NE — No esencial</option>
+                    <option value="N/A">N/A</option>
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label>Fijo / Variable</label>
+                  <select className="input" value={formCon.fijo_variable}
+                    onChange={e => setFormCon(p => ({ ...p, fijo_variable: e.target.value }))}>
+                    <option value="F">F — Fijo</option>
+                    <option value="V">V — Variable</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid-2">
+                <div className="input-group">
+                  <label>Periodicidad</label>
+                  <select className="input" value={formCon.periodicidad}
+                    onChange={e => setFormCon(p => ({ ...p, periodicidad: e.target.value, dia_pago: '', mes_ciclo: '', dia_vencimiento: '' }))}>
+                    {PERIODICIDADES.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label>Monto presupuestado</label>
+                  <input className="input" type="number" min="0" placeholder="0"
+                    value={formCon.monto_presupuestado}
+                    onChange={e => setFormCon(p => ({ ...p, monto_presupuestado: e.target.value }))}
+                    style={{ fontFamily: 'var(--mono)' }} />
+                </div>
+              </div>
+
+              {/* Fecha de pago — solo si Fijo */}
+              {formCon.fijo_variable === 'F' && (
+                <>
+                  {formCon.periodicidad === 'Mensual' ? (
+                    <div className="input-group">
+                      <label>Día de pago (1–31)</label>
+                      <input className="input" type="number" min="1" max="31" placeholder="Ej: 1, 15, 30"
+                        value={formCon.dia_pago}
+                        onChange={e => setFormCon(p => ({ ...p, dia_pago: e.target.value }))} />
+                    </div>
+                  ) : (
+                    <div className="grid-2">
+                      <div className="input-group">
+                        <label>
+                          Mes del ciclo
+                          <span style={{ color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>
+                            (1–{formCon.periodicidad === 'Bimensual' ? 2 : formCon.periodicidad === 'Trimestral' ? 3 : formCon.periodicidad === 'Semestral' ? 6 : 12})
+                          </span>
+                        </label>
+                        <input className="input" type="number" min="1"
+                          max={formCon.periodicidad === 'Bimensual' ? 2 : formCon.periodicidad === 'Trimestral' ? 3 : formCon.periodicidad === 'Semestral' ? 6 : 12}
+                          placeholder="Ej: 3"
+                          value={formCon.mes_ciclo}
+                          onChange={e => setFormCon(p => ({ ...p, mes_ciclo: e.target.value }))} />
+                      </div>
+                      <div className="input-group">
+                        <label>Día de vencimiento</label>
+                        <input className="input" type="number" min="1" max="31" placeholder="Ej: 20"
+                          value={formCon.dia_vencimiento}
+                          onChange={e => setFormCon(p => ({ ...p, dia_vencimiento: e.target.value }))} />
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="input-group">
+                <label>Observaciones (opcional)</label>
+                <input className="input" type="text" placeholder="Notas..."
+                  value={formCon.observaciones}
+                  onChange={e => setFormCon(p => ({ ...p, observaciones: e.target.value }))} />
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }}
+                  onClick={() => setModalCon(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }}
+                  disabled={saving}>{saving ? 'Guardando...' : editandoCon ? 'Actualizar' : 'Crear'}</button>
               </div>
             </form>
           </div>
