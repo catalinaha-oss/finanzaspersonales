@@ -47,7 +47,7 @@ export default function InversionesPage() {
   }
 
   async function updateValorMercado(invId) {
-    const v = parseFloat(newValor.replace(/\./g,'').replace(',','.'))
+    const v = parseFloat(newValor)  // FIX #16: input type=number no necesita replace
     if (isNaN(v)) return
     await supabase.from('valor_mercado').insert({
       user_id: user.id, inversion_id: invId,
@@ -58,7 +58,8 @@ export default function InversionesPage() {
 
   const totalAportadoTotal = inversiones.reduce((s, inv) => s + totalAportado(inv), 0)
   const totalActualTotal   = inversiones.reduce((s, inv) => s + Number(valorMercado[inv.id]?.valor_actual_cop || 0), 0)
-  const roiTotal = totalAportadoTotal > 0 ? ((totalActualTotal - totalAportadoTotal) / totalAportadoTotal) * 100 : 0
+  // FIX #18: mostrar — si no hay valor de mercado registrado
+  const roiTotal = (totalAportadoTotal > 0 && totalActualTotal > 0) ? ((totalActualTotal - totalAportadoTotal) / totalAportadoTotal) * 100 : null
 
   const TIPO_COLORS = { Acciones: 'var(--accent)', Cripto: 'var(--amber)', Fondo: 'var(--green)', Inmueble: 'var(--purple)', CDT: 'var(--green2)', Otro: 'var(--text2)' }
 
@@ -85,7 +86,7 @@ export default function InversionesPage() {
           </div>
           <div>
             <p style={{ fontSize: '0.72rem', color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>ROI total</p>
-            <p className="mono" style={{ fontWeight: 600, fontSize: '0.95rem', color: roiTotal >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatPct(roiTotal)}</p>
+            <p className="mono" style={{ fontWeight: 600, fontSize: '0.95rem', color: roiTotal >= 0 ? 'var(--green)' : 'var(--red)' }}>{roiTotal !== null ? formatPct(roiTotal) : '—'}</p>
           </div>
         </div>
       </div>
@@ -159,7 +160,7 @@ export default function InversionesPage() {
       {/* Modal agregar activo */}
       {showAdd && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowAdd(false)}>
-          <div className="modal">
+          <div className="modal">  {/* FIX #17: modal ya tiene padding-bottom en CSS global */}
             <div className="modal-handle" />
             <h2>Nuevo activo</h2>
             <form onSubmit={saveActivo} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>

@@ -7,13 +7,12 @@ export default function MetasPage() {
   const { user } = useAuth()
   const [metas, setMetas]     = useState([])
   const [loading, setLoading] = useState(true)
-  const [editando, setEditando]   = useState(null)  // id de meta editando valor actual
-  const [editMeta, setEditMeta]   = useState(null)  // id de meta editando objetivo
-  const [newValActual, setNewValActual] = useState('')
-  const [newValMeta, setNewValMeta]     = useState('')
-  const [showAdd, setShowAdd] = useState(false)
-  const [formAdd, setFormAdd] = useState({ nombre: '', valor_meta: '' })
-  const [saving, setSaving]   = useState(false)
+  // FIX #11: un solo estado de edición en vez de dos
+  const [editMode, setEditMode] = useState(null) // { id, campo: 'actual'|'meta' }
+  const [editVal, setEditVal]   = useState('')
+  const [showAdd, setShowAdd]   = useState(false)
+  const [formAdd, setFormAdd]   = useState({ nombre: '', valor_meta: '' })
+  const [saving, setSaving]     = useState(false)
 
   async function load() {
     setLoading(true)
@@ -25,28 +24,34 @@ export default function MetasPage() {
 
   useEffect(() => { load() }, [user.id])
 
-  async function updateValorActual(id) {
-    const v = parseFloat(newValActual.replace(/\./g,'').replace(',','.'))
-    if (isNaN(v)) return
-    setSaving(true)
-    await supabase.from('metas').update({ valor_actual: v, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', user.id)
-    setSaving(false); setEditando(null); setNewValActual(''); load()
+  function abrirEdicion(id, campo, valorActual) {
+    setEditMode({ id, campo })
+    // FIX #9: no usar replace en inputs tipo number — usar el valor directo
+    setEditVal(String(valorActual))
   }
 
-  async function updateValorMeta(id) {
-    const v = parseFloat(newValMeta.replace(/\./g,'').replace(',','.'))
-    if (isNaN(v)) return
+  async function guardarEdicion() {
+    if (!editMode) return
+    // FIX #9: parseFloat directo sin replace
+    const v = parseFloat(editVal)
+    if (isNaN(v) || v < 0) return
     setSaving(true)
-    await supabase.from('metas').update({ valor_meta: v, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', user.id)
-    setSaving(false); setEditMeta(null); setNewValMeta(''); load()
+    const campo = editMode.campo === 'actual' ? 'valor_actual' : 'valor_meta'
+    await supabase.from('metas')
+      .update({ [campo]: v, updated_at: new Date().toISOString() })
+      .eq('id', editMode.id).eq('user_id', user.id)
+    setSaving(false); setEditMode(null); setEditVal(''); load()
   }
 
   async function crearMeta(e) {
     e.preventDefault()
-    const v = parseFloat(formAdd.valor_meta.replace(/\./g,'').replace(',','.'))
-    if (!formAdd.nombre.trim() || isNaN(v)) return
+    // FIX #9: parseFloat directo
+    const v = parseFloat(formAdd.valor_meta)
+    if (!formAdd.nombre.trim() || isNaN(v) || v <= 0) return
     setSaving(true)
-    await supabase.from('metas').insert({ user_id: user.id, nombre: formAdd.nombre.trim(), valor_meta: v, valor_actual: 0 })
+    await supabase.from('metas').insert({
+      user_id: user.id, nombre: formAdd.nombre.trim(), valor_meta: v, valor_actual: 0
+    })
     setSaving(false); setShowAdd(false); setFormAdd({ nombre: '', valor_meta: '' }); load()
   }
 
@@ -60,6 +65,26 @@ export default function MetasPage() {
   const totalMeta   = metas.reduce((s,m) => s + Number(m.valor_meta), 0)
   const totalActual = metas.reduce((s,m) => s + Number(m.valor_actual), 0)
   const totalPct    = totalMeta > 0 ? (totalActual / totalMeta) * 100 : 0
+
+  function EditInline({ metaId, campo, valor }) {
+    const isEditing = editMode?.id === metaId && editMode?.campo === campo
+    if (isEditing) return (
+      <div style={{ display: 'flex', gap: 4 }}>
+        <input className="input" type="number" min="0" step="1000"
+          value={editVal} onChange={e => setEditVal(e.target.value)}
+          autoFocus style={{ padding: '3px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)' }} />
+        <button className="btn btn-primary btn-sm" disabled={saving} onClick={guardarEdicion}>OK</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => setEditMode(null)}>×</button>
+      </div>
+    )
+    return (
+      <p className="mono" style={{ fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
+        color: campo === 'actual' ? 'var(--accent)' : 'var(--text)' }}
+        onClick={() => abrirEdicion(metaId, campo, valor)}>
+        {formatCompact(valor)} <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>✎</span>
+      </p>
+    )
+  }
 
   return (
     <div className="page animate-in">
@@ -81,7 +106,6 @@ export default function MetasPage() {
         </div>
       </div>
 
-      {/* Metas */}
       {loading ? (
         [1,2,3,4].map(i => <div key={i} className="skeleton" style={{ height: 130, marginBottom: 10, borderRadius: 12 }} />)
       ) : metas.map((m, idx) => {
@@ -94,9 +118,11 @@ export default function MetasPage() {
             <div className="flex justify-between items-center" style={{ marginBottom: 8 }}>
               <h3 style={{ fontSize: '0.95rem' }}>{m.nombre}</h3>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span className={`badge ${pct >= 100 ? 'badge-green' : pct >= 50 ? 'badge-blue' : 'badge-amber'}`}>{pct.toFixed(1)}%</span>
+                <span className={`badge ${pct >= 100 ? 'badge-green' : pct >= 50 ? 'badge-blue' : 'badge-amber'}`}>
+                  {pct.toFixed(1)}%
+                </span>
                 <button onClick={() => eliminarMeta(m.id)}
-                  style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '0.75rem', padding: '2px 4px' }}>✕</button>
+                  style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '0.9rem', padding: '2px 4px' }}>✕</button>
               </div>
             </div>
 
@@ -104,42 +130,14 @@ export default function MetasPage() {
               <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
             </div>
 
-            <div className="grid-2" style={{ marginBottom: 10 }}>
-              {/* Valor actual */}
+            <div className="grid-2" style={{ marginBottom: faltante > 0 ? 10 : 0 }}>
               <div>
-                <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 2 }}>Acumulado</p>
-                {editando === m.id ? (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <input className="input" type="number" value={newValActual}
-                      onChange={e => setNewValActual(e.target.value)}
-                      style={{ padding: '3px 6px', fontSize: '0.8rem', fontFamily: 'var(--mono)' }} />
-                    <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => updateValorActual(m.id)}>OK</button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setEditando(null)}>×</button>
-                  </div>
-                ) : (
-                  <p className="mono" style={{ fontWeight: 600, color, fontSize: '0.9rem', cursor: 'pointer' }}
-                    onClick={() => { setEditando(m.id); setNewValActual(String(m.valor_actual)); setEditMeta(null) }}>
-                    {formatCompact(m.valor_actual)} <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>✎</span>
-                  </p>
-                )}
+                <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 4 }}>Acumulado</p>
+                <EditInline metaId={m.id} campo="actual" valor={Number(m.valor_actual)} />
               </div>
-              {/* Valor meta / objetivo */}
               <div>
-                <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 2 }}>Objetivo</p>
-                {editMeta === m.id ? (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <input className="input" type="number" value={newValMeta}
-                      onChange={e => setNewValMeta(e.target.value)}
-                      style={{ padding: '3px 6px', fontSize: '0.8rem', fontFamily: 'var(--mono)' }} />
-                    <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => updateValorMeta(m.id)}>OK</button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setEditMeta(null)}>×</button>
-                  </div>
-                ) : (
-                  <p className="mono" style={{ fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text)' }}
-                    onClick={() => { setEditMeta(m.id); setNewValMeta(String(m.valor_meta)); setEditando(null) }}>
-                    {formatCompact(m.valor_meta)} <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>✎</span>
-                  </p>
-                )}
+                <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 4 }}>Objetivo</p>
+                <EditInline metaId={m.id} campo="meta" valor={Number(m.valor_meta)} />
               </div>
             </div>
 
@@ -152,7 +150,7 @@ export default function MetasPage() {
         )
       })}
 
-      {/* Modal nueva meta */}
+      {/* FIX #10: modal con paddingBottom para no tapar con nav */}
       {showAdd && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowAdd(false)}>
           <div className="modal">
@@ -160,19 +158,21 @@ export default function MetasPage() {
             <h2>Nueva meta</h2>
             <form onSubmit={crearMeta} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="input-group">
-                <label>Nombre de la meta</label>
-                <input className="input" required placeholder="Ej: Fondo vacaciones, Carro..."
+                <label>Nombre</label>
+                <input className="input" required placeholder="Ej: Carro, Vacaciones..."
                   value={formAdd.nombre} onChange={e => setFormAdd(p => ({ ...p, nombre: e.target.value }))} autoFocus />
               </div>
               <div className="input-group">
                 <label>Valor objetivo (COP)</label>
-                <input className="input" required type="number" placeholder="0"
+                <input className="input" required type="number" min="1" placeholder="0"
                   value={formAdd.valor_meta} onChange={e => setFormAdd(p => ({ ...p, valor_meta: e.target.value }))}
                   style={{ fontFamily: 'var(--mono)', fontSize: '1.1rem' }} />
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }} onClick={() => setShowAdd(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }} disabled={saving}>{saving ? 'Guardando...' : 'Crear meta'}</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }}
+                  onClick={() => setShowAdd(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }}
+                  disabled={saving}>{saving ? 'Guardando...' : 'Crear meta'}</button>
               </div>
             </form>
           </div>

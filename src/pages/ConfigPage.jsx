@@ -18,7 +18,7 @@ export default function ConfigPage() {
     setLoading(true)
     const { data } = await supabase
       .from('categorias')
-      .select('id, tipo, nombre, orden, conceptos(id)')
+      .select('id, tipo, nombre, orden, conceptos(id)').eq('user_id', user.id)
       .eq('user_id', user.id)
       .order('tipo').order('nombre')
     setCategorias(data || [])

@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { formatCOP, formatCompact, currentYearMonth, monthLabel, getUpcomingAlerts } from '../lib/utils'
+import { formatCompact, monthLabel, getUpcomingAlerts } from '../lib/utils'
 
-const CAT_COLORS = ['#f75f5f','#f7855f','#f7b44f','#4f8ef7','#2dd4a0','#a78bfa','#60c8f7','#f76fa0','#4ade80','#fbbf24','#8b93a8']
+const DOT_COLORS = ['#f75f5f','#f7855f','#f7b44f','#4f8ef7','#2dd4a0','#a78bfa','#60c8f7','#f76fa0','#4ade80','#fbbf24','#8b93a8']
 
 function getPctColor(pct) {
   if (pct > 100) return '#f75f5f'
@@ -14,10 +14,11 @@ function getPctColor(pct) {
 
 export default function Dashboard({ refresh }) {
   const { user } = useAuth()
-  const { anio, mes } = currentYearMonth()
+  // BUG 1 FIX: ref estable para que anio/mes no cambien entre renders
+  const { anio, mes } = useRef((() => { const d = new Date(); return { anio: d.getFullYear(), mes: d.getMonth() + 1 } })()).current
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
-  const [alerts, setAlerts]   = useState([])
+  const [alerts, setAlerts]   = useState([])  // FIX #5: nombre distinto al de la var local
   const [filtro, setFiltro]   = useState('todos')
 
   const load = useCallback(async () => {
@@ -34,7 +35,6 @@ export default function Dashboard({ refresh }) {
         .eq('user_id', user.id).eq('activo', true),
     ])
 
-    // Totales del mes
     const ingresos = txs?.filter(t => t.tipo_movimiento === 'ingreso').reduce((s,t) => s + Number(t.valor), 0) || 0
     const gastos   = txs?.filter(t => t.tipo_movimiento === 'gasto').reduce((s,t) => s + Number(t.valor), 0) || 0
     const ahorro   = txs?.filter(t => t.tipo_movimiento === 'ahorro').reduce((s,t) => s + Number(t.valor), 0) || 0
@@ -48,7 +48,7 @@ export default function Dashboard({ refresh }) {
       presupuestoCat[cat] = (presupuestoCat[cat] || 0) + (Number(c.monto_presupuestado) || 0) * factor
     }
 
-    // Real por categoría
+    // Real por categoría (solo gastos)
     const realCat = {}
     for (const t of txs || []) {
       if (t.tipo_movimiento !== 'gasto') continue
@@ -56,7 +56,7 @@ export default function Dashboard({ refresh }) {
       realCat[cat] = (realCat[cat] || 0) + Number(t.valor)
     }
 
-    // Combinar y calcular %
+    // Combinar — FIX #7 y #8: separar categorías sin presupuesto
     const allCats = new Set([...Object.keys(presupuestoCat), ...Object.keys(realCat)])
     const catData = Array.from(allCats).map(nombre => {
       const presupuesto = presupuestoCat[nombre] || 0
@@ -64,18 +64,23 @@ export default function Dashboard({ refresh }) {
       const pct         = presupuesto > 0 ? (real / presupuesto) * 100 : null
       return { nombre, presupuesto, real, pct }
     }).sort((a, b) => {
-      const pa = a.pct ?? -1
-      const pb = b.pct ?? -1
-      return pb - pa
+      // null al final, resto de mayor a menor
+      if (a.pct === null && b.pct === null) return 0
+      if (a.pct === null) return 1
+      if (b.pct === null) return -1
+      return b.pct - a.pct
     })
 
     const presupuestoTotal = Object.values(presupuestoCat).reduce((s,v) => s + v, 0)
-    const desbordados = catData.filter(c => c.pct !== null && c.pct > 100).length
-    const enRiesgo    = catData.filter(c => c.pct !== null && c.pct >= 80 && c.pct <= 100).length
-    const bien        = catData.filter(c => c.pct !== null && c.pct < 80).length
+    // FIX #7/#8: excluir pct=null de contadores
+    const conPct       = catData.filter(c => c.pct !== null)
+    const desbordados  = conPct.filter(c => c.pct > 100).length
+    const enRiesgo     = conPct.filter(c => c.pct >= 80 && c.pct <= 100).length
+    const bien         = conPct.filter(c => c.pct < 80).length
 
-    const alerts = getUpcomingAlerts(conceptos || [])
-    setAlerts(alerts)
+    // FIX #5: renombrar variable local
+    const upcomingAlerts = getUpcomingAlerts(conceptos || [])
+    setAlerts(upcomingAlerts)
     setData({ ingresos, gastos, ahorro, flujo: ingresos - gastos - ahorro, catData, presupuestoTotal, desbordados, enRiesgo, bien })
     setLoading(false)
   }, [user.id, anio, mes])
@@ -88,11 +93,16 @@ export default function Dashboard({ refresh }) {
     </div>
   )
 
+  // FIX #6: guard contra data null
+  if (!data) return null
+
   const { ingresos, gastos, ahorro, flujo, catData, presupuestoTotal, desbordados, enRiesgo, bien } = data
   const ejecutadoPct = presupuestoTotal > 0 ? Math.min((gastos / presupuestoTotal) * 100, 100) : 0
 
-  const catFiltradas = filtro === 'desbordados' ? catData.filter(c => c.pct > 100)
-    : filtro === 'riesgo' ? catData.filter(c => c.pct >= 80 && c.pct <= 100)
+  // FIX #7/#8: filtros correctos excluyendo pct=null del filtro "bien"
+  const catFiltradas = filtro === 'desbordados' ? catData.filter(c => c.pct !== null && c.pct > 100)
+    : filtro === 'riesgo'       ? catData.filter(c => c.pct !== null && c.pct >= 80 && c.pct <= 100)
+    : filtro === 'bien'         ? catData.filter(c => c.pct !== null && c.pct < 80)
     : catData
 
   return (
@@ -105,7 +115,9 @@ export default function Dashboard({ refresh }) {
       {/* Flujo */}
       <div className="card" style={{ marginBottom: '0.75rem', background: flujo >= 0 ? 'rgba(45,212,160,0.08)' : 'rgba(247,95,95,0.08)', borderColor: flujo >= 0 ? 'rgba(45,212,160,0.2)' : 'rgba(247,95,95,0.2)' }}>
         <p style={{ color: 'var(--text2)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Flujo del mes</p>
-        <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: flujo >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em' }}>{formatCOP(flujo)}</p>
+        <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: flujo >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em' }}>
+          {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(flujo)}
+        </p>
         <p style={{ color: 'var(--text2)', fontSize: '0.8rem', marginTop: 4 }}>
           Ingresos: <strong style={{ color: 'var(--green)' }}>{formatCompact(ingresos)}</strong>
           {' · '}Gastos: <strong style={{ color: 'var(--red)' }}>{formatCompact(gastos)}</strong>
@@ -139,22 +151,24 @@ export default function Dashboard({ refresh }) {
           {alerts.slice(0, 3).map((a, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: i < Math.min(alerts.length,3)-1 ? '1px solid var(--border)' : 'none' }}>
               <span style={{ fontSize: '0.85rem' }}>{a.concepto.nombre}</span>
-              <span style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 600 }}>{a.dias === 0 ? 'Hoy' : a.dias === 1 ? 'Mañana' : `En ${a.dias} días`}</span>
+              <span style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 600 }}>
+                {a.dias === 0 ? 'Hoy' : a.dias === 1 ? 'Mañana' : `En ${a.dias} días`}
+              </span>
             </div>
           ))}
         </div>
       )}
 
-      {/* Contadores */}
+      {/* Contadores — clicables para filtrar */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: '0.75rem' }}>
         {[
-          { label: 'Desbordados', val: desbordados, color: 'var(--red)',   border: 'rgba(247,95,95,0.2)',   filtro: 'desbordados' },
-          { label: 'En riesgo',   val: enRiesgo,    color: 'var(--amber)', border: 'rgba(247,180,79,0.2)', filtro: 'riesgo' },
-          { label: 'Bien',        val: bien,         color: 'var(--green)', border: 'rgba(45,212,160,0.2)', filtro: 'bien' },
+          { label: 'Desbordados', val: desbordados, color: 'var(--red)',   border: 'rgba(247,95,95,0.2)',   key: 'desbordados' },
+          { label: 'En riesgo',   val: enRiesgo,    color: 'var(--amber)', border: 'rgba(247,180,79,0.2)', key: 'riesgo'      },
+          { label: 'Bien',        val: bien,         color: 'var(--green)', border: 'rgba(45,212,160,0.2)', key: 'bien'        },
         ].map(item => (
-          <button key={item.filtro} onClick={() => setFiltro(filtro === item.filtro ? 'todos' : item.filtro)}
-            style={{ background: filtro === item.filtro ? `${item.border}` : 'var(--bg2)', border: `1px solid ${item.border}`, borderRadius: 10, padding: '10px 6px', cursor: 'pointer', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.65rem', color: item.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>{item.label}</div>
+          <button key={item.key} onClick={() => setFiltro(filtro === item.key ? 'todos' : item.key)}
+            style={{ background: filtro === item.key ? item.border : 'var(--bg2)', border: `1px solid ${item.border}`, borderRadius: 10, padding: '10px 6px', cursor: 'pointer', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.63rem', color: item.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>{item.label}</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700, color: item.color, fontFamily: 'var(--mono)' }}>{item.val}</div>
           </button>
         ))}
@@ -165,27 +179,40 @@ export default function Dashboard({ refresh }) {
         {catFiltradas.length === 0 ? (
           <p style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text2)', fontSize: '0.875rem' }}>Sin categorías en este filtro</p>
         ) : catFiltradas.map((cat, i) => {
-          const pct   = cat.pct ?? 0
-          const color = getPctColor(pct)
-          const dotColor = CAT_COLORS[i % CAT_COLORS.length]
-          const isOver = pct > 100
+          const pct      = cat.pct ?? null
+          const color    = pct !== null ? getPctColor(pct) : 'var(--text3)'
+          const dotColor = DOT_COLORS[i % DOT_COLORS.length]
+          const isOver   = pct !== null && pct > 100
+          const sinPresu = pct === null
+
           return (
             <div key={cat.nombre} style={{ padding: '10px 14px', borderBottom: i < catFiltradas.length-1 ? '1px solid var(--border)' : 'none' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: sinPresu ? 0 : 6 }}>
                 <div style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
                 <span style={{ fontSize: '0.875rem', fontWeight: 500, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.nombre}</span>
-                <span className={`badge ${isOver ? 'badge-red' : pct >= 80 ? 'badge-amber' : pct >= 50 ? 'badge-blue' : 'badge-green'}`}>
-                  {isOver ? `+${(pct-100).toFixed(0)}%` : `${pct.toFixed(0)}%`}
-                </span>
+                {sinPresu ? (
+                  <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text3)' }}>Sin presupuesto</span>
+                ) : (
+                  <span className={`badge ${isOver ? 'badge-red' : pct >= 80 ? 'badge-amber' : pct >= 50 ? 'badge-blue' : 'badge-green'}`}>
+                    {isOver ? `+${(pct-100).toFixed(0)}%` : `${pct.toFixed(0)}%`}
+                  </span>
+                )}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div className="progress-bar" style={{ flex: 1 }}>
-                  <div className="progress-fill" style={{ width: `${Math.min(pct,100)}%`, background: color }} />
+              {!sinPresu && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="progress-bar" style={{ flex: 1 }}>
+                    <div className="progress-fill" style={{ width: `${Math.min(pct,100)}%`, background: color }} />
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text2)', fontFamily: 'var(--mono)', minWidth: 110, textAlign: 'right' }}>
+                    {formatCompact(cat.real)} / {formatCompact(cat.presupuesto)}
+                  </span>
                 </div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text2)', fontFamily: 'var(--mono)', minWidth: 100, textAlign: 'right' }}>
-                  {formatCompact(cat.real)}{cat.presupuesto > 0 ? ` / ${formatCompact(cat.presupuesto)}` : ''}
-                </span>
-              </div>
+              )}
+              {sinPresu && cat.real > 0 && (
+                <p style={{ fontSize: '0.72rem', color: 'var(--text3)', paddingLeft: 15, marginTop: 3 }}>
+                  Gastado: {formatCompact(cat.real)}
+                </p>
+              )}
             </div>
           )
         })}
