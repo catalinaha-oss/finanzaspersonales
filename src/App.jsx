@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import TransaccionesPage from './pages/TransaccionesPage'
 import MetasPage from './pages/MetasPage'
 import InversionesPage from './pages/InversionesPage'
+import ConfigPage from './pages/ConfigPage'
 import BottomNav from './components/BottomNav'
 import TransactionModal from './components/TransactionModal'
 
@@ -31,11 +32,12 @@ function AppRoutes() {
   return (
     <>
       <Routes>
-        <Route path="/"             element={<Dashboard refresh={refreshKey} />} />
+        <Route path="/"              element={<Dashboard refresh={refreshKey} />} />
         <Route path="/transacciones" element={<TransaccionesPage refresh={refreshKey} />} />
-        <Route path="/metas"        element={<MetasPage />} />
-        <Route path="/inversiones"  element={<InversionesPage />} />
-        <Route path="*"             element={<Navigate to="/" />} />
+        <Route path="/metas"         element={<MetasPage />} />
+        <Route path="/inversiones"   element={<InversionesPage />} />
+        <Route path="/config"        element={<ConfigPage />} />
+        <Route path="*"              element={<Navigate to="/" />} />
       </Routes>
       <BottomNav onAdd={() => setShowModal(true)} />
       {showModal && (

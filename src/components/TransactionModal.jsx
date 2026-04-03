@@ -18,7 +18,7 @@ export default function TransactionModal({ onClose, onSaved }) {
   useEffect(() => {
     async function load() {
       const [{ data: cats }, { data: cons }] = await Promise.all([
-        supabase.from('categorias').select('*').order('orden'),
+        supabase.from('categorias').select('*').eq('user_id', user.id).order('orden'),
         supabase.from('conceptos').select('*, categorias(nombre,tipo)').eq('user_id', user.id).eq('activo', true)
       ])
       setCategorias(cats || [])
