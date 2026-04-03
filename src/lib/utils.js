@@ -57,32 +57,40 @@ export function calcularMesesAlerta(periodicidad, mesCiclo) {
   return result.join(', ')
 }
 
-export function getUpcomingAlerts(conceptos, daysAhead = 7) {
-  const now  = new Date()
-  const year = now.getFullYear()
-  const month= now.getMonth() + 1
-  const day  = now.getDate()
+// conceptosPagados: Set de concepto_id que ya tienen transacción este mes
+// daysAhead: días hacia adelante para alertas próximas
+export function getUpcomingAlerts(conceptos, conceptosPagados = new Set(), daysAhead = 7) {
+  const now   = new Date()
+  const month = now.getMonth() + 1
+  const day   = now.getDate()
   const alerts = []
 
   for (const c of conceptos) {
     if (c.fijo_variable !== 'F') continue
+    // Si ya tiene movimiento registrado este mes, no alertar
+    if (conceptosPagados.has(c.id)) continue
+
+    let diff = null
 
     if (c.periodicidad === 'Mensual' && c.dia_pago) {
-      const diff = c.dia_pago - day
-      if (diff >= 0 && diff <= daysAhead) {
-        alerts.push({ concepto: c, dias: diff, fecha: `Día ${c.dia_pago} de este mes` })
+      diff = c.dia_pago - day
+      // Mostrar: vencidos del mes (diff < 0) + próximos (0 <= diff <= daysAhead)
+      if (diff <= daysAhead) {
+        alerts.push({ concepto: c, dias: diff, vencido: diff < 0 })
       }
     } else if (c.mes_ciclo && c.dia_vencimiento) {
       const ciclos = { Bimensual: 2, Trimestral: 3, Semestral: 6, Anual: 12 }
       const n = ciclos[c.periodicidad]
       if (n && ((month - 1) % n) + 1 === c.mes_ciclo) {
-        const diff = c.dia_vencimiento - day
-        if (diff >= 0 && diff <= daysAhead) {
-          alerts.push({ concepto: c, dias: diff, fecha: `Día ${c.dia_vencimiento} de este mes` })
+        diff = c.dia_vencimiento - day
+        if (diff <= daysAhead) {
+          alerts.push({ concepto: c, dias: diff, vencido: diff < 0 })
         }
       }
     }
   }
+
+  // Primero vencidos (más negativos primero = más atrasados), luego próximos
   return alerts.sort((a, b) => a.dias - b.dias)
 }
 

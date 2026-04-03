@@ -111,12 +111,19 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
     const enRiesgo    = conPct.filter(c => c.pct >= 80 && c.pct <= 100).length
     const bien        = conPct.filter(c => c.pct < 80).length
 
-    // Alertas usando los conceptos (sin join)
+    // Set de concepto_id que ya tienen movimiento registrado este mes
+    const conceptosPagados = new Set(
+      (txData || [])
+        .filter(t => t.concepto_id && t.tipo_movimiento === 'gasto')
+        .map(t => t.concepto_id)
+    )
+
+    // Alertas: próximos Y vencidos sin pago registrado
     const conceptosConCat = (consData || []).map(c => ({
       ...c,
       categorias: catMap[c.categoria_id] || null
     }))
-    setAlerts(getUpcomingAlerts(conceptosConCat))
+    setAlerts(getUpcomingAlerts(conceptosConCat, conceptosPagados))
     setData({ ingresos, gastos, ahorroMes, ahorroAcumulado, flujo: ingresos - gastos, catData, presupuestoTotal, desbordados, enRiesgo, bien })
     setLoading(false)
   }
@@ -196,51 +203,89 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
       </div>
 
       {/* Alertas */}
-      {alerts.length > 0 && (
-        <div className="card" style={{ marginBottom: '0.75rem', borderColor: 'rgba(247,180,79,0.25)', background: 'rgba(247,180,79,0.06)' }}>
-          <p style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--amber)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/>
-            </svg>
-            {alerts.length} pago{alerts.length > 1 ? 's' : ''} próximo{alerts.length > 1 ? 's' : ''}
-          </p>
-          {alerts.slice(0, 5).map((a, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '8px 0',
-              borderBottom: i < Math.min(alerts.length,5)-1 ? '1px solid var(--border)' : 'none'
-            }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {a.concepto.nombre}
-                </p>
-                <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginTop: 1 }}>
-                  {a.dias === 0 ? 'Hoy' : a.dias === 1 ? 'Mañana' : `En ${a.dias} días`}
-                  {a.concepto.monto_presupuestado ? ` · $${Number(a.concepto.monto_presupuestado).toLocaleString('es-CO')}` : ''}
-                </p>
-              </div>
-              <button
-                onClick={() => onRegistrarPago?.({
-                  tipo_movimiento: 'gasto',
-                  concepto_id: a.concepto.id,
-                  categoria_id: a.concepto.categoria_id,
-                  monto_presupuestado: a.concepto.monto_presupuestado,
-                  nombre: a.concepto.nombre,
-                })}
-                style={{
-                  flexShrink: 0, padding: '5px 10px', borderRadius: 6,
-                  border: '1px solid rgba(247,180,79,0.4)',
-                  background: 'rgba(247,180,79,0.1)', color: 'var(--amber)',
-                  fontFamily: 'var(--font)', fontSize: '0.75rem', fontWeight: 600,
-                  cursor: 'pointer', whiteSpace: 'nowrap',
-                  transition: 'background 0.15s',
-                }}>
-                Registrar ›
-              </button>
+      {alerts.length > 0 && (() => {
+        const vencidos  = alerts.filter(a => a.vencido)
+        const proximos  = alerts.filter(a => !a.vencido)
+        const total     = alerts.length
+        const hayVencidos = vencidos.length > 0
+
+        const AlertRow = ({ a, i, last }) => (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 0',
+            borderBottom: !last ? '1px solid var(--border)' : 'none'
+          }}>
+            {/* Indicador vencido */}
+            {a.vencido && (
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--red)', flexShrink: 0 }} />
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontSize: '0.875rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.concepto.nombre}
+              </p>
+              <p style={{ fontSize: '0.72rem', marginTop: 1, color: a.vencido ? 'var(--red)' : 'var(--text2)' }}>
+                {a.vencido
+                  ? `Venció hace ${Math.abs(a.dias)} día${Math.abs(a.dias) !== 1 ? 's' : ''}`
+                  : a.dias === 0 ? 'Hoy'
+                  : a.dias === 1 ? 'Mañana'
+                  : `En ${a.dias} días`}
+                {a.concepto.monto_presupuestado
+                  ? ` · $${Number(a.concepto.monto_presupuestado).toLocaleString('es-CO')}`
+                  : ''}
+              </p>
             </div>
-          ))}
-        </div>
-      )}
+            <button
+              onClick={() => onRegistrarPago?.({
+                tipo_movimiento: 'gasto',
+                concepto_id: a.concepto.id,
+                categoria_id: a.concepto.categoria_id,
+                monto_presupuestado: a.concepto.monto_presupuestado,
+                nombre: a.concepto.nombre,
+              })}
+              style={{
+                flexShrink: 0, padding: '5px 10px', borderRadius: 6,
+                border: `1px solid ${a.vencido ? 'rgba(247,95,95,0.4)' : 'rgba(247,180,79,0.4)'}`,
+                background: a.vencido ? 'rgba(247,95,95,0.1)' : 'rgba(247,180,79,0.1)',
+                color: a.vencido ? 'var(--red)' : 'var(--amber)',
+                fontFamily: 'var(--font)', fontSize: '0.75rem', fontWeight: 600,
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}>
+              Registrar ›
+            </button>
+          </div>
+        )
+
+        return (
+          <div className="card" style={{ marginBottom: '0.75rem', borderColor: hayVencidos ? 'rgba(247,95,95,0.25)' : 'rgba(247,180,79,0.25)', background: hayVencidos ? 'rgba(247,95,95,0.04)' : 'rgba(247,180,79,0.04)' }}>
+            <p style={{ fontWeight: 600, fontSize: '0.82rem', color: hayVencidos ? 'var(--red)' : 'var(--amber)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/>
+              </svg>
+              Pagos próximos y/o pendientes
+              <span style={{ marginLeft: 'auto', fontSize: '0.72rem', fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: hayVencidos ? 'rgba(247,95,95,0.15)' : 'rgba(247,180,79,0.15)' }}>
+                {total}
+              </span>
+            </p>
+
+            {/* Vencidos primero */}
+            {vencidos.map((a, i) => (
+              <AlertRow key={`v-${i}`} a={a} i={i} last={i === vencidos.length - 1 && proximos.length === 0} />
+            ))}
+
+            {/* Separador si hay ambos */}
+            {vencidos.length > 0 && proximos.length > 0 && (
+              <p style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text3)', padding: '6px 0 4px' }}>
+                Próximos
+              </p>
+            )}
+
+            {/* Próximos */}
+            {proximos.map((a, i) => (
+              <AlertRow key={`p-${i}`} a={a} i={i} last={i === proximos.length - 1} />
+            ))}
+          </div>
+        )
+      })()}
 
       {/* Contadores */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: '0.75rem' }}>
