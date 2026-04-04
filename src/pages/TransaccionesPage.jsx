@@ -2,29 +2,26 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { formatCOP, dateLabel, monthLabel } from '../lib/utils'
+import MonthPicker from '../components/MonthPicker'
 
 export default function TransaccionesPage({ refresh }) {
   const { user } = useAuth()
+  const now = new Date()
+  const [periodo, setPeriodo]   = useState({ anio: now.getFullYear(), mes: now.getMonth() + 1 })
   const [txs, setTxs]           = useState([])
-  const [conceptoMap, setConceptoMap] = useState({})  // id → nombre
-  const [catMap, setCatMap]           = useState({})   // id → nombre categoria
+  const [conceptoMap, setConceptoMap] = useState({})
+  const [catMap, setCatMap]           = useState({})
   const [loading, setLoading]   = useState(true)
   const [filtro, setFiltro]     = useState('todos')
   const [busqueda, setBusqueda] = useState('')
 
-  const now     = new Date()
-  const anio    = now.getFullYear()
-  const mes     = now.getMonth() + 1
+  const { anio, mes } = periodo
   const firstDay = `${anio}-${String(mes).padStart(2,'0')}-01`
   const lastDay  = new Date(anio, mes, 0).toISOString().split('T')[0]
 
   async function load() {
     setLoading(true)
-
-    // SOLUCIÓN: queries planas sin joins anidados (evita problemas de RLS)
-    const [{ data: txData, error: txErr },
-           { data: consData },
-           { data: catsData }] = await Promise.all([
+    const [{ data: txData, error: txErr }, { data: consData }, { data: catsData }] = await Promise.all([
       supabase.from('transacciones')
         .select('id, fecha, valor, tipo_movimiento, medio_pago, observaciones, concepto_id, created_at')
         .eq('user_id', user.id)
@@ -32,27 +29,16 @@ export default function TransaccionesPage({ refresh }) {
         .lte('fecha', lastDay)
         .order('fecha', { ascending: false })
         .order('created_at', { ascending: false }),
-      supabase.from('conceptos')
-        .select('id, nombre, categoria_id')
-        .eq('user_id', user.id),
-      supabase.from('categorias')
-        .select('id, nombre')
-        .eq('user_id', user.id),
+      supabase.from('conceptos').select('id, nombre, categoria_id').eq('user_id', user.id),
+      supabase.from('categorias').select('id, nombre').eq('user_id', user.id),
     ])
 
-    if (txErr) {
-      console.error('Error cargando transacciones:', txErr.message)
-      setLoading(false); return
-    }
+    if (txErr) { console.error('Error:', txErr.message); setLoading(false); return }
 
-    // Construir mapas locales
     const cMap = {}
     for (const cat of catsData || []) cMap[cat.id] = cat.nombre
-
     const coMap = {}
-    for (const con of consData || []) {
-      coMap[con.id] = { nombre: con.nombre, categoria: cMap[con.categoria_id] || '' }
-    }
+    for (const con of consData || []) coMap[con.id] = { nombre: con.nombre, categoria: cMap[con.categoria_id] || '' }
 
     setTxs(txData || [])
     setConceptoMap(coMap)
@@ -60,8 +46,7 @@ export default function TransaccionesPage({ refresh }) {
     setLoading(false)
   }
 
-  // Recargar cuando refresh cambia (nuevo movimiento registrado)
-  useEffect(() => { load() }, [refresh, user.id])
+  useEffect(() => { load() }, [refresh, user.id, anio, mes])
 
   const filtered = txs.filter(t => {
     const matchTipo = filtro === 'todos' || t.tipo_movimiento === filtro
@@ -84,16 +69,17 @@ export default function TransaccionesPage({ refresh }) {
     load()
   }
 
-  const TIPO_COLORS = {
-    ingreso: 'var(--green)', gasto: 'var(--red)',
-    ahorro: 'var(--amber)', transferencia: 'var(--accent)'
-  }
+  const TIPO_COLORS = { ingreso: 'var(--green)', gasto: 'var(--red)', ahorro: 'var(--amber)', transferencia: 'var(--accent)' }
 
   return (
     <div className="page animate-in">
-      <div className="page-header">
-        <h1>Movimientos</h1>
-        <p>{monthLabel(anio, mes)} · {txs.length} registros</p>
+      {/* Header con selector de mes */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+        <div>
+          <h1 style={{ fontSize: '1.5rem' }}>Movimientos</h1>
+          <p style={{ color: 'var(--text2)', fontSize: '0.875rem', marginTop: 2 }}>{txs.length} registros</p>
+        </div>
+        <MonthPicker anio={anio} mes={mes} onChange={p => { setPeriodo(p); setBusqueda('') }} />
       </div>
 
       <input className="input" type="search" placeholder="Buscar movimiento..."
@@ -102,16 +88,15 @@ export default function TransaccionesPage({ refresh }) {
 
       <div style={{ display: 'flex', gap: 6, marginBottom: '0.75rem', overflowX: 'auto', paddingBottom: 2 }}>
         {[
-          { key: 'todos',   label: 'Todos'   },
-          { key: 'gasto',   label: 'Gastos'  },
-          { key: 'ingreso', label: 'Ingresos'},
-          { key: 'ahorro',  label: 'Ahorros' },
+          { key: 'todos',   label: 'Todos'    },
+          { key: 'gasto',   label: 'Gastos'   },
+          { key: 'ingreso', label: 'Ingresos' },
+          { key: 'ahorro',  label: 'Ahorros'  },
         ].map(f => (
           <button key={f.key} onClick={() => setFiltro(f.key)}
             style={{
               padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer',
-              fontFamily: 'var(--font)', fontSize: '0.8rem', fontWeight: 600,
-              whiteSpace: 'nowrap',
+              fontFamily: 'var(--font)', fontSize: '0.8rem', fontWeight: 600, whiteSpace: 'nowrap',
               background: filtro === f.key ? 'var(--accent)' : 'var(--bg3)',
               color: filtro === f.key ? '#fff' : 'var(--text2)',
             }}>
@@ -127,39 +112,23 @@ export default function TransaccionesPage({ refresh }) {
             {filtered.length} movimiento{filtered.length !== 1 ? 's' : ''}
           </span>
           <div style={{ display: 'flex', gap: 10 }}>
-            {totales.ingresos > 0 && (
-              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--green)', fontWeight: 600 }}>
-                +{formatCOP(totales.ingresos)}
-              </span>
-            )}
-            {totales.gastos > 0 && (
-              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--red)', fontWeight: 600 }}>
-                -{formatCOP(totales.gastos)}
-              </span>
-            )}
-            {totales.ahorro > 0 && (
-              <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--amber)', fontWeight: 600 }}>
-                ↗{formatCOP(totales.ahorro)}
-              </span>
-            )}
+            {totales.ingresos > 0 && <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--green)', fontWeight: 600 }}>+{formatCOP(totales.ingresos)}</span>}
+            {totales.gastos   > 0 && <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--red)',   fontWeight: 600 }}>-{formatCOP(totales.gastos)}</span>}
+            {totales.ahorro   > 0 && <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--amber)', fontWeight: 600 }}>↗{formatCOP(totales.ahorro)}</span>}
           </div>
         </div>
       </div>
 
       {/* Lista */}
       {loading ? (
-        [1,2,3,4,5].map(i => (
-          <div key={i} className="skeleton" style={{ height: 64, marginBottom: 8, borderRadius: 10 }} />
-        ))
+        [1,2,3,4,5].map(i => <div key={i} className="skeleton" style={{ height: 64, marginBottom: 8, borderRadius: 10 }} />)
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
           <p style={{ fontSize: '2.5rem', marginBottom: 8 }}>📭</p>
           <p style={{ fontWeight: 500 }}>
-            {txs.length === 0 ? 'Sin movimientos este mes' : 'Sin resultados para este filtro'}
+            {txs.length === 0 ? `Sin movimientos en ${monthLabel(anio, mes)}` : 'Sin resultados para este filtro'}
           </p>
-          <p style={{ fontSize: '0.82rem', marginTop: 6, color: 'var(--text3)' }}>
-            Usa el botón + para registrar un movimiento
-          </p>
+          <p style={{ fontSize: '0.82rem', marginTop: 6, color: 'var(--text3)' }}>Usa el botón + para registrar uno</p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -168,32 +137,17 @@ export default function TransaccionesPage({ refresh }) {
             const nombre   = concepto?.nombre || t.observaciones || 'Sin concepto'
             const catNom   = concepto?.categoria || ''
             return (
-              <div key={t.id} style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                padding: '12px 16px',
-                borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none',
-              }}>
-                <div style={{
-                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                  background: TIPO_COLORS[t.tipo_movimiento] || 'var(--text3)'
-                }} />
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: TIPO_COLORS[t.tipo_movimiento] || 'var(--text3)' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {nombre}
-                  </p>
+                  <p style={{ fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nombre}</p>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text2)', marginTop: 1 }}>
-                    {dateLabel(t.fecha)}
-                    {catNom && ` · ${catNom}`}
-                    {t.medio_pago && ` · ${t.medio_pago}`}
+                    {dateLabel(t.fecha)}{catNom && ` · ${catNom}`}{t.medio_pago && ` · ${t.medio_pago}`}
                   </p>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <p className="mono" style={{
-                    fontWeight: 600, fontSize: '0.9rem',
-                    color: TIPO_COLORS[t.tipo_movimiento] || 'var(--text)'
-                  }}>
-                    {t.tipo_movimiento === 'gasto' ? '-' : '+'}
-                    {formatCOP(t.valor)}
+                  <p className="mono" style={{ fontWeight: 600, fontSize: '0.9rem', color: TIPO_COLORS[t.tipo_movimiento] || 'var(--text)' }}>
+                    {t.tipo_movimiento === 'gasto' ? '-' : '+'}{formatCOP(t.valor)}
                   </p>
                   <button onClick={() => deleteTx(t.id)}
                     style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 0' }}>
