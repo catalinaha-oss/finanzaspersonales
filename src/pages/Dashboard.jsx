@@ -115,7 +115,7 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
       setAlerts([])
     }
 
-    setData({ ingresos, gastos, ahorroMes, ahorroAcumulado, flujo: ingresos - gastos, catData, presupuestoTotal, desbordados, enRiesgo, bien })
+    setData({ ingresos, gastos, ahorroMes, ahorroAcumulado, flujo: ingresos - gastos - ahorroMes, catData, presupuestoTotal, desbordados, enRiesgo, bien })
     setLoading(false)
   }
 
@@ -146,22 +146,27 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
         <MonthPicker anio={anio} mes={mes} onChange={setPeriodo} />
       </div>
 
-      {/* Flujo — solo ingresos - gastos */}
+      {/* Flujo — ingresos - gastos - ahorro */}
       <div className="card" style={{ marginBottom: '0.75rem', background: flujo >= 0 ? 'rgba(45,212,160,0.06)' : 'rgba(247,95,95,0.08)', borderColor: flujo >= 0 ? 'rgba(45,212,160,0.2)' : 'rgba(247,95,95,0.2)' }}>
         <p style={{ color: 'var(--text2)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Flujo del mes</p>
         <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color: flujo >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em', marginBottom: 10 }}>
           {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(flujo)}
         </p>
         <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', marginBottom: 10 }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center', gap: 4 }}>
           <div>
-            <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 2 }}>Ingresos</p>
-            <p className="mono" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--green)' }}>+{formatCompact(ingresos)}</p>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text2)', marginBottom: 2 }}>Ingresos</p>
+            <p className="mono" style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--green)' }}>+{formatCompact(ingresos)}</p>
           </div>
-          <span style={{ color: 'var(--text3)', fontSize: '1rem' }}>−</span>
+          <span style={{ color: 'var(--text3)', fontSize: '0.9rem', textAlign: 'center' }}>−</span>
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text2)', marginBottom: 2 }}>Gastos</p>
+            <p className="mono" style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--red)' }}>{formatCompact(gastos)}</p>
+          </div>
+          <span style={{ color: 'var(--text3)', fontSize: '0.9rem', textAlign: 'center' }}>−</span>
           <div style={{ textAlign: 'right' }}>
-            <p style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 2 }}>Gastos</p>
-            <p className="mono" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--red)' }}>{formatCompact(gastos)}</p>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text2)', marginBottom: 2 }}>Ahorro</p>
+            <p className="mono" style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--amber)' }}>{formatCompact(ahorroMes)}</p>
           </div>
         </div>
       </div>
