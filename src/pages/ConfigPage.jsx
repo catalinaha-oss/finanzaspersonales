@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import { formatCompact } from '../lib/utils'
 
 const TIPOS = ['Ingreso', 'Gasto', 'Ahorro/Inversión']
 const TIPO_COLORS = {
@@ -200,6 +201,40 @@ export default function ConfigPage() {
   }
 
   // ── Renders ────────────────────────────────────────────────
+  // ── METAS ──────────────────────────────────────────────────
+  function abrirNuevaMeta() {
+    setEditMeta(null); setFormMeta({ nombre: '', valor_meta: '' }); setModalMeta(true)
+  }
+  function abrirEditarMeta(m) {
+    setEditMeta(m.id); setFormMeta({ nombre: m.nombre, valor_meta: String(m.valor_meta) }); setModalMeta(true)
+  }
+  async function guardarMeta(e) {
+    e.preventDefault()
+    const v = parseFloat(formMeta.valor_meta)
+    if (!formMeta.nombre.trim() || isNaN(v) || v <= 0) return
+    setSaving(true)
+    if (editMeta) {
+      await supabase.from('metas').update({ nombre: formMeta.nombre.trim(), valor_meta: v }).eq('id', editMeta).eq('user_id', user.id)
+    } else {
+      await supabase.from('metas').insert({ user_id: user.id, nombre: formMeta.nombre.trim(), valor_meta: v, valor_actual: 0 })
+    }
+    setSaving(false); setModalMeta(false); load()
+  }
+  async function eliminarMeta(id) {
+    if (!confirm('¿Eliminar esta meta?')) return
+    await supabase.from('metas').update({ activo: false }).eq('id', id).eq('user_id', user.id)
+    load()
+  }
+  async function guardarValorMeta(id) {
+    const v = parseFloat(editVal)
+    if (isNaN(v) || v < 0) return
+    const campo = editMode.campo === 'actual' ? 'valor_actual' : 'valor_meta'
+    setSaving(true)
+    await supabase.from('metas').update({ [campo]: v, updated_at: new Date().toISOString() }).eq('id', id).eq('user_id', user.id)
+    setSaving(false); setEditMode(null); setEditVal(''); load()
+  }
+  const COLORS_META = ['var(--accent)', 'var(--green)', 'var(--purple)', 'var(--amber)', 'var(--red)', 'var(--green2)']
+
   const porTipo = TIPOS.map(tipo => ({
     tipo, cats: categorias.filter(c => c.tipo === tipo)
   })).filter(g => g.cats.length > 0)
@@ -300,6 +335,89 @@ export default function ConfigPage() {
               </div>
             </div>
           ))}
+
+          {/* Metas */}
+          <div className="divider" />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <h2 style={{ fontSize: '1rem' }}>Metas financieras</h2>
+            <button className="btn btn-primary btn-sm" onClick={abrirNuevaMeta}>+ Meta</button>
+          </div>
+          {metas.length === 0 ? (
+            <p style={{ color: 'var(--text2)', fontSize: '0.85rem', marginBottom: '1rem' }}>Sin metas creadas aún.</p>
+          ) : metas.map((m, idx) => {
+            const pct   = m.valor_meta > 0 ? Math.min((m.valor_actual / m.valor_meta) * 100, 100) : 0
+            const color = COLORS_META[idx % COLORS_META.length]
+            const faltante = Math.max(Number(m.valor_meta) - Number(m.valor_actual), 0)
+            return (
+              <div key={m.id} className="card" style={{ marginBottom: '0.75rem', borderLeft: `3px solid ${color}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <p style={{ fontWeight: 600, fontSize: '0.9rem' }}>{m.nombre}</p>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => abrirEditarMeta(m)} style={{ padding: '3px 8px', fontSize: '0.75rem' }}>Editar</button>
+                    <button onClick={() => eliminarMeta(m.id)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '1rem', padding: '2px 4px' }}>×</button>
+                  </div>
+                </div>
+                <div className="progress-bar" style={{ marginBottom: 8 }}>
+                  <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 3 }}>Acumulado</p>
+                    {editMode?.id === m.id && editMode?.campo === 'actual' ? (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <input className="input" type="number" min="0" value={editVal} onChange={e => setEditVal(e.target.value)} autoFocus style={{ padding: '3px 6px', fontSize: '0.8rem', fontFamily: 'var(--mono)' }} />
+                        <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => guardarValorMeta(m.id)}>OK</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setEditMode(null)}>×</button>
+                      </div>
+                    ) : (
+                      <p className="mono" style={{ fontWeight: 600, color, cursor: 'pointer', fontSize: '0.9rem' }} onClick={() => { setEditMode({ id: m.id, campo: 'actual' }); setEditVal(String(m.valor_actual)) }}>
+                        {formatCompact(m.valor_actual)} <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>✎</span>
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <p style={{ fontSize: '0.68rem', color: 'var(--text2)', marginBottom: 3 }}>Objetivo</p>
+                    {editMode?.id === m.id && editMode?.campo === 'meta' ? (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <input className="input" type="number" min="0" value={editVal} onChange={e => setEditVal(e.target.value)} autoFocus style={{ padding: '3px 6px', fontSize: '0.8rem', fontFamily: 'var(--mono)' }} />
+                        <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => guardarValorMeta(m.id)}>OK</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setEditMode(null)}>×</button>
+                      </div>
+                    ) : (
+                      <p className="mono" style={{ fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer' }} onClick={() => { setEditMode({ id: m.id, campo: 'meta' }); setEditVal(String(m.valor_meta)) }}>
+                        {formatCompact(m.valor_meta)} <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>✎</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {faltante > 0 && <p style={{ fontSize: '0.75rem', color: 'var(--text2)', marginTop: 6 }}>Falta: <strong style={{ color: 'var(--text)' }}>{formatCompact(faltante)}</strong> · {pct.toFixed(1)}%</p>}
+              </div>
+            )
+          })}
+
+          {/* Modal meta */}
+          {modalMeta && (
+            <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModalMeta(false)}>
+              <div className="modal">
+                <div className="modal-handle" />
+                <h2>{editMeta ? 'Editar meta' : 'Nueva meta'}</h2>
+                <form onSubmit={guardarMeta} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div className="input-group">
+                    <label>Nombre</label>
+                    <input className="input" required placeholder="Ej: Fondo vacaciones, Carro..." value={formMeta.nombre} onChange={e => setFormMeta(p => ({ ...p, nombre: e.target.value }))} autoFocus />
+                  </div>
+                  <div className="input-group">
+                    <label>Valor objetivo (COP)</label>
+                    <input className="input" required type="number" min="1" placeholder="0" value={formMeta.valor_meta} onChange={e => setFormMeta(p => ({ ...p, valor_meta: e.target.value }))} style={{ fontFamily: 'var(--mono)', fontSize: '1.1rem' }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }} onClick={() => setModalMeta(false)}>Cancelar</button>
+                    <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }} disabled={saving}>{saving ? 'Guardando...' : editMeta ? 'Actualizar' : 'Crear'}</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
           {/* Cuenta */}
           <div className="divider" />
