@@ -16,6 +16,7 @@ function getPctColor(pct) {
 
 export default function Dashboard({ refresh, onRegistrarPago }) {
   const { user } = useAuth()
+  const navigate  = useNavigate()
   const now = new Date()
   const [periodo, setPeriodo] = useState({ anio: now.getFullYear(), mes: now.getMonth() + 1 })
   const [data, setData]       = useState(null)
