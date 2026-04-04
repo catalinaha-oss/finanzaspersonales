@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { formatCompact, monthLabel, getUpcomingAlerts } from '../lib/utils'
@@ -138,10 +139,15 @@ export default function Dashboard({ refresh, onRegistrarPago }) {
 
   return (
     <div className="page animate-in">
-      {/* Header con selector de mes */}
+      {/* Header con selector de mes y acceso a reportes */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
         <div>
           <h1 style={{ fontSize: '1.5rem' }}>Resumen financiero</h1>
+          <button onClick={() => navigate('/reportes')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: 7, padding: '4px 10px', color: 'var(--purple)', cursor: 'pointer', fontFamily: 'var(--font)', fontSize: '0.75rem', fontWeight: 600 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6m0 0a2 2 0 002 2h2a2 2 0 002-2m0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m0 0a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2h-2a2 2 0 00-2 2v14"/></svg>
+            Ver reportes →
+          </button>
         </div>
         <MonthPicker anio={anio} mes={mes} onChange={setPeriodo} />
       </div>
