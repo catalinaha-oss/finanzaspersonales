@@ -23,7 +23,8 @@ export default function ConfigPage() {
   const [editandoCat, setEditCat]     = useState(null)
   const [editandoCon, setEditCon]     = useState(null)
   const [formCat,  setFormCat]  = useState({ nombre: '', tipo: 'Gasto' })
-  const [formCon,  setFormCon]  = useState({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '' })
+  const [formCon,  setFormCon]  = useState({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '', meta_id: '' })
+  const [metas,       setMetas]       = useState([])
   const [saving,      setSaving]      = useState(false)
 
   async function load() {
@@ -32,17 +33,19 @@ export default function ConfigPage() {
       { data: cats, error: e1 },
       { data: cons },
       { data: txs  },
+      { data: mts  },
     ] = await Promise.all([
       supabase.from('categorias').select('id, tipo, nombre, orden').eq('user_id', user.id).order('tipo').order('nombre'),
-      supabase.from('conceptos').select('id, nombre, categoria_id, esencial, fijo_variable, periodicidad, monto_presupuestado, dia_pago, mes_ciclo, dia_vencimiento, activo').eq('user_id', user.id).order('nombre'),
+      supabase.from('conceptos').select('id, nombre, categoria_id, meta_id, esencial, fijo_variable, periodicidad, monto_presupuestado, dia_pago, mes_ciclo, dia_vencimiento, activo').eq('user_id', user.id).order('nombre'),
       supabase.from('transacciones').select('concepto_id').eq('user_id', user.id).not('concepto_id', 'is', null),
+      supabase.from('metas').select('id, nombre').eq('user_id', user.id).eq('activo', true).order('nombre'),
     ])
     if (e1) { setErrorMsg('Error: ' + e1.message); setLoading(false); return }
     const txCon = {}
     for (const t of txs || []) if (t.concepto_id) txCon[t.concepto_id] = (txCon[t.concepto_id] || 0) + 1
     const txCat = {}
     for (const c of cons || []) if (txCon[c.id]) txCat[c.categoria_id] = (txCat[c.categoria_id] || 0) + txCon[c.id]
-    setCategorias(cats || []); setConceptos(cons || [])
+    setCategorias(cats || []); setConceptos(cons || []); setMetas(mts || [])
     setTxConceptos(txCon); setTxCats(txCat); setLoading(false)
   }
 
@@ -78,17 +81,17 @@ export default function ConfigPage() {
   function abrirConceptos(cat) { setCatSel(cat); setVista('conceptos') }
   function abrirNuevoCon() {
     setEditCon(null)
-    setFormCon({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '' })
+    setFormCon({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '', meta_id: '' })
     setModalCon(true)
   }
   function abrirEditarCon(con) {
     setEditCon(con.id)
-    setFormCon({ nombre: con.nombre||'', esencial: con.esencial||'E', fijo_variable: con.fijo_variable||'F', periodicidad: con.periodicidad||'Mensual', monto_presupuestado: con.monto_presupuestado!=null?String(con.monto_presupuestado):'', dia_pago: con.dia_pago!=null?String(con.dia_pago):'', mes_ciclo: con.mes_ciclo!=null?String(con.mes_ciclo):'', dia_vencimiento: con.dia_vencimiento!=null?String(con.dia_vencimiento):'', observaciones: con.observaciones||'' })
+    setFormCon({ nombre: con.nombre||'', esencial: con.esencial||'E', fijo_variable: con.fijo_variable||'F', periodicidad: con.periodicidad||'Mensual', monto_presupuestado: con.monto_presupuestado!=null?String(con.monto_presupuestado):'', dia_pago: con.dia_pago!=null?String(con.dia_pago):'', mes_ciclo: con.mes_ciclo!=null?String(con.mes_ciclo):'', dia_vencimiento: con.dia_vencimiento!=null?String(con.dia_vencimiento):'', observaciones: con.observaciones||'', meta_id: con.meta_id||'' })
     setModalCon(true)
   }
   async function guardarCon(e) {
     e.preventDefault(); if (!formCon.nombre.trim() || !catSel) return; setSaving(true)
-    const payload = { nombre: formCon.nombre.trim(), esencial: formCon.esencial, fijo_variable: formCon.fijo_variable, periodicidad: formCon.periodicidad, monto_presupuestado: formCon.monto_presupuestado ? parseFloat(formCon.monto_presupuestado) : null, dia_pago: formCon.dia_pago ? parseInt(formCon.dia_pago) : null, mes_ciclo: formCon.mes_ciclo ? parseInt(formCon.mes_ciclo) : null, dia_vencimiento: formCon.dia_vencimiento ? parseInt(formCon.dia_vencimiento) : null, observaciones: formCon.observaciones || null }
+    const payload = { nombre: formCon.nombre.trim(), esencial: formCon.esencial, fijo_variable: formCon.fijo_variable, periodicidad: formCon.periodicidad, monto_presupuestado: formCon.monto_presupuestado ? parseFloat(formCon.monto_presupuestado) : null, dia_pago: formCon.dia_pago ? parseInt(formCon.dia_pago) : null, mes_ciclo: formCon.mes_ciclo ? parseInt(formCon.mes_ciclo) : null, dia_vencimiento: formCon.dia_vencimiento ? parseInt(formCon.dia_vencimiento) : null, observaciones: formCon.observaciones || null, meta_id: formCon.meta_id || null }
     const { error } = editandoCon
       ? await supabase.from('conceptos').update(payload).eq('id', editandoCon).eq('user_id', user.id)
       : await supabase.from('conceptos').insert({ ...payload, user_id: user.id, categoria_id: catSel.id, activo: true })
@@ -216,6 +219,11 @@ export default function ConfigPage() {
                           <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>{con.periodicidad}</span>
                           {con.monto_presupuestado != null && <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>${Number(con.monto_presupuestado).toLocaleString('es-CO')}</span>}
                           {labelFecha(con) && <span className="badge" style={{ background: 'rgba(247,180,79,0.12)', color: 'var(--amber)' }}>{labelFecha(con)}</span>}
+                          {con.meta_id && metas.find(m => m.id === con.meta_id) && (
+                            <span className="badge" style={{ background: 'rgba(247,180,79,0.12)', color: 'var(--amber)' }}>
+                              🎯 {metas.find(m => m.id === con.meta_id)?.nombre}
+                            </span>
+                          )}
                           {nTx > 0 && <span className="badge" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text3)' }}>{nTx} mov.</span>}
                         </div>
                       </div>
@@ -296,6 +304,21 @@ export default function ConfigPage() {
                 )
               )}
               <div className="input-group"><label>Observaciones (opcional)</label><input className="input" type="text" placeholder="Notas..." value={formCon.observaciones} onChange={e => setFormCon(p => ({ ...p, observaciones: e.target.value }))} /></div>
+
+              {/* Meta asociada — solo para conceptos de Ahorro/Inversión */}
+              {catSel?.tipo === 'Ahorro/Inversión' && (
+                <div className="input-group">
+                  <label>Meta asociada (opcional)</label>
+                  <select className="input" value={formCon.meta_id}
+                    onChange={e => setFormCon(p => ({ ...p, meta_id: e.target.value }))}>
+                    <option value="">— Sin meta asociada —</option>
+                    {metas.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                  </select>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: 4 }}>
+                    Si está asociada, al registrar un aporte se actualizará automáticamente el acumulado de la meta.
+                  </p>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }} onClick={() => setModalCon(false)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }} disabled={saving}>{saving ? 'Guardando...' : editandoCon ? 'Actualizar' : 'Crear'}</button>
