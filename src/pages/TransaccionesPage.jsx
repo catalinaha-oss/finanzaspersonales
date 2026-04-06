@@ -20,9 +20,27 @@ function DetalleDrawer({ tx, conceptoMap, catMap, onClose, onEditar, onEliminar 
   const signo = tx.tipo_movimiento === 'gasto' ? '-' : '+'
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom, 16px))' }}>
-        <div className="modal-handle" />
+    <div
+      onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 200, backdropFilter: 'blur(4px)',
+        padding: '1rem',
+        animation: 'fadeIn 0.2s ease',
+      }}
+    >
+      <div style={{
+        background: 'var(--bg2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '1.5rem 1.25rem',
+        width: '100%', maxWidth: 500,
+        maxHeight: '80dvh', overflowY: 'auto',
+        animation: 'slideUp 0.25s ease',
+      }}>
+        {/* Sin modal-handle — es un card centrado, no un bottom sheet */}
 
         {/* Encabezado con color según tipo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
@@ -80,6 +98,7 @@ function DetalleDrawer({ tx, conceptoMap, catMap, onClose, onEditar, onEliminar 
       </div>
     </div>
   )
+}
 }
 
 // ── Página principal ───────────────────────────────────────────────────────────
@@ -264,7 +283,7 @@ export default function TransaccionesPage({ refresh }) {
                     {t.tipo_movimiento === 'gasto' ? '-' : '+'}{formatCOP(t.valor)}
                   </p>
                   {/* Indicador visual de que es tappable */}
-                  <span style={{ color: 'var(--text3)', fontSize: '0.7rem' }}>›</span>
+                  <span style={{ color: 'var(--text2)', fontSize: '0.85rem', marginTop: 2, display: 'block' }}>›</span>
                 </div>
               </div>
             )
