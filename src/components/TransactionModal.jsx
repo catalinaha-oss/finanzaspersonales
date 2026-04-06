@@ -3,33 +3,47 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { today } from '../lib/utils'
 
-export default function TransactionModal({ onClose, onSaved, prefill }) {
+/**
+ * TransactionModal
+ *
+ * Modos de uso:
+ *   1. Crear nuevo:       <TransactionModal onClose onSaved />
+ *   2. Pre-fill alerta:   <TransactionModal prefill={...} onClose onSaved />
+ *   3. Editar existente:  <TransactionModal editData={tx} onClose onSaved />
+ *
+ * editData = objeto transacción completo tal como viene de Supabase
+ *   { id, tipo_movimiento, concepto_id, fecha, valor, medio_pago, observaciones }
+ */
+export default function TransactionModal({ onClose, onSaved, prefill, editData }) {
   const { user } = useAuth()
+  const isEdit = Boolean(editData)
 
-  // Datos base
-  const [categorias,    setCategorias]    = useState([])
+  const [categorias,     setCategorias]     = useState([])
   const [todosConceptos, setTodosConceptos] = useState([])
   const [metas,          setMetas]          = useState([])
 
-  // Formulario
   const [catFilter, setCatFilter] = useState(prefill?.categoria_id || '')
-  const [tipo,      setTipo]      = useState(prefill?.tipo_movimiento || 'gasto')
+  const [tipo,      setTipo]      = useState(
+    editData?.tipo_movimiento || prefill?.tipo_movimiento || 'gasto'
+  )
   const [form, setForm] = useState({
-    concepto_id:   prefill?.concepto_id || '',
-    fecha:         today(),
-    valor:         prefill?.monto_presupuestado ? String(Math.round(prefill.monto_presupuestado)) : '',
-    medio_pago:    'débito',
-    observaciones: '',
+    concepto_id:   editData?.concepto_id   || prefill?.concepto_id || '',
+    fecha:         editData?.fecha          || today(),
+    valor:         editData?.valor          ? String(Math.round(editData.valor))
+                                            : (prefill?.monto_presupuestado ? String(Math.round(prefill.monto_presupuestado)) : ''),
+    medio_pago:    editData?.medio_pago     || 'débito',
+    observaciones: editData?.observaciones  || '',
   })
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
   const [ready,  setReady]  = useState(false)
 
+  const valorAnterior = editData?.valor ? Number(editData.valor) : 0
+
   useEffect(() => {
     async function load() {
       const [{ data: cats }, { data: cons }, { data: mts }] = await Promise.all([
         supabase.from('categorias').select('id, nombre, tipo').eq('user_id', user.id).order('nombre'),
-        // Incluir meta_id en la query de conceptos
         supabase.from('conceptos').select('id, nombre, categoria_id, meta_id')
           .eq('user_id', user.id).eq('activo', true).order('nombre'),
         supabase.from('metas').select('id, nombre, valor_actual, valor_meta')
@@ -38,16 +52,21 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
       setCategorias(cats || [])
       setTodosConceptos(cons || [])
       setMetas(mts || [])
+
+      // En modo edición, deducir catFilter del concepto ya seleccionado
+      if (editData?.concepto_id && cons) {
+        const con = cons.find(c => c.id === editData.concepto_id)
+        if (con) setCatFilter(con.categoria_id || '')
+      }
+
       setReady(true)
     }
     load()
   }, [user.id])
 
-  // Mapa local: id → categoría
   const catMap = {}
   for (const c of categorias) catMap[c.id] = c
 
-  // Categorías filtradas según tipo de movimiento
   const categoriasFiltradas = categorias.filter(c => {
     if (tipo === 'ingreso') return c.tipo === 'Ingreso'
     if (tipo === 'gasto')   return c.tipo === 'Gasto'
@@ -55,7 +74,6 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
     return false
   })
 
-  // Conceptos filtrados por tipo y categoría seleccionada
   const conceptosFiltrados = todosConceptos.filter(c => {
     const cat = catMap[c.categoria_id]
     if (!cat) return false
@@ -66,7 +84,6 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
     return !catFilter || c.categoria_id === catFilter
   })
 
-  // Concepto actualmente seleccionado (para leer su meta_id)
   const conceptoSel = todosConceptos.find(c => c.id === form.concepto_id)
   const metaDelConcepto = conceptoSel?.meta_id
     ? metas.find(m => m.id === conceptoSel.meta_id)
@@ -100,33 +117,69 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
 
     setSaving(true)
 
-    // Insertar transacción
-    const { error: txErr } = await supabase.from('transacciones').insert({
-      user_id:         user.id,
-      fecha:           form.fecha,
-      valor:           valorNum,
-      tipo_movimiento: tipo,
-      concepto_id:     form.concepto_id,
-      medio_pago:      form.medio_pago || null,
-      observaciones:   form.observaciones || null,
-      origen:          'manual',
-    })
-
-    if (txErr) {
-      setSaving(false)
-      setError('Error al guardar: ' + txErr.message)
-      return
-    }
-
-    // Si es ahorro y el concepto tiene meta asociada → actualizar valor_actual
-    if (tipo === 'ahorro' && metaDelConcepto) {
-      await supabase.from('metas')
+    if (isEdit) {
+      // ── MODO EDICIÓN ──────────────────────────────────────────────────────
+      const { error: txErr } = await supabase
+        .from('transacciones')
         .update({
-          valor_actual: Number(metaDelConcepto.valor_actual) + valorNum,
-          updated_at:   new Date().toISOString()
+          fecha:           form.fecha,
+          valor:           valorNum,
+          tipo_movimiento: tipo,
+          concepto_id:     form.concepto_id,
+          medio_pago:      form.medio_pago || null,
+          observaciones:   form.observaciones || null,
         })
-        .eq('id', metaDelConcepto.id)
+        .eq('id', editData.id)
         .eq('user_id', user.id)
+
+      if (txErr) {
+        setSaving(false)
+        setError('Error al actualizar: ' + txErr.message)
+        return
+      }
+
+      // Ajustar meta: solo si el tipo sigue siendo ahorro y hay meta asociada
+      if (tipo === 'ahorro' && editData.tipo_movimiento === 'ahorro' && metaDelConcepto) {
+        const diff = valorNum - valorAnterior
+        if (diff !== 0) {
+          await supabase.from('metas')
+            .update({
+              valor_actual: Number(metaDelConcepto.valor_actual) + diff,
+              updated_at:   new Date().toISOString()
+            })
+            .eq('id', metaDelConcepto.id)
+            .eq('user_id', user.id)
+        }
+      }
+
+    } else {
+      // ── MODO CREACIÓN ────────────────────────────────────────────────────
+      const { error: txErr } = await supabase.from('transacciones').insert({
+        user_id:         user.id,
+        fecha:           form.fecha,
+        valor:           valorNum,
+        tipo_movimiento: tipo,
+        concepto_id:     form.concepto_id,
+        medio_pago:      form.medio_pago || null,
+        observaciones:   form.observaciones || null,
+        origen:          'manual',
+      })
+
+      if (txErr) {
+        setSaving(false)
+        setError('Error al guardar: ' + txErr.message)
+        return
+      }
+
+      if (tipo === 'ahorro' && metaDelConcepto) {
+        await supabase.from('metas')
+          .update({
+            valor_actual: Number(metaDelConcepto.valor_actual) + valorNum,
+            updated_at:   new Date().toISOString()
+          })
+          .eq('id', metaDelConcepto.id)
+          .eq('user_id', user.id)
+      }
     }
 
     setSaving(false)
@@ -135,17 +188,21 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
   }
 
   const TIPOS = [
-    { id: 'gasto',   label: 'Gasto',  color: 'var(--red)'   },
-    { id: 'ingreso', label: 'Ingreso', color: 'var(--green)' },
-    { id: 'ahorro',  label: 'Ahorro',  color: 'var(--amber)' },
+    { id: 'gasto',   label: 'Gasto',   color: 'var(--red)'   },
+    { id: 'ingreso', label: 'Ingreso',  color: 'var(--green)' },
+    { id: 'ahorro',  label: 'Ahorro',   color: 'var(--amber)' },
   ]
+
+  const titulo = isEdit ? 'Editar movimiento'
+    : prefill ? `Registrar: ${prefill.nombre}`
+    : 'Registrar movimiento'
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-handle" />
-        <h2>{prefill ? `Registrar: ${prefill.nombre}` : 'Registrar movimiento'}</h2>
-        {prefill && (
+        <h2>{titulo}</h2>
+        {prefill && !isEdit && (
           <p style={{ fontSize: '0.82rem', color: 'var(--text2)', marginBottom: '0.75rem', marginTop: '-0.5rem' }}>
             Revisa los datos y confirma
           </p>
@@ -178,7 +235,7 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
               style={{ fontSize: '1.2rem', fontFamily: 'var(--mono)', fontWeight: 600 }} />
           </div>
 
-          {/* Categoría — aplica para todos los tipos */}
+          {/* Categoría */}
           <div className="input-group">
             <label>Categoría</label>
             <select className="input" value={catFilter}
@@ -190,7 +247,7 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
             </select>
           </div>
 
-          {/* Concepto — aplica para todos los tipos */}
+          {/* Concepto */}
           <div className="input-group">
             <label>
               Concepto *
@@ -222,7 +279,7 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
             )}
           </div>
 
-          {/* Info de meta asociada — solo si el concepto tiene meta */}
+          {/* Info meta asociada */}
           {tipo === 'ahorro' && metaDelConcepto && (
             <div style={{ background: 'rgba(247,180,79,0.08)', border: '1px solid rgba(247,180,79,0.2)', borderRadius: 8, padding: '0.6rem 0.9rem' }}>
               <p style={{ fontSize: '0.78rem', color: 'var(--amber)', fontWeight: 600, marginBottom: 3 }}>
@@ -230,7 +287,7 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
               </p>
               <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>
                 Acumulado actual: ${Number(metaDelConcepto.valor_actual).toLocaleString('es-CO')}
-                {' · '}Al guardar se sumará el valor ingresado.
+                {isEdit ? ' · Al guardar se ajustará la diferencia.' : ' · Al guardar se sumará el valor ingresado.'}
               </p>
             </div>
           )}
@@ -273,7 +330,7 @@ export default function TransactionModal({ onClose, onSaved, prefill }) {
               onClick={onClose} style={{ justifyContent: 'center' }}>Cancelar</button>
             <button type="submit" className="btn btn-primary w-full"
               disabled={saving} style={{ justifyContent: 'center' }}>
-              {saving ? 'Guardando...' : prefill ? 'Confirmar pago' : 'Guardar'}
+              {saving ? 'Guardando...' : isEdit ? 'Guardar cambios' : prefill ? 'Confirmar pago' : 'Guardar'}
             </button>
           </div>
         </form>

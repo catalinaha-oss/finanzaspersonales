@@ -3,17 +3,102 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { formatCOP, dateLabel, monthLabel } from '../lib/utils'
 import MonthPicker from '../components/MonthPicker'
+import TransactionModal from '../components/TransactionModal'
 
+// ── Drawer de detalle ──────────────────────────────────────────────────────────
+function DetalleDrawer({ tx, conceptoMap, catMap, onClose, onEditar, onEliminar }) {
+  if (!tx) return null
+
+  const concepto  = conceptoMap[tx.concepto_id]
+  const nombre    = concepto?.nombre || tx.observaciones || 'Sin concepto'
+  const catNom    = concepto?.categoria || '—'
+  const TIPO_COLORS = {
+    ingreso: 'var(--green)', gasto: 'var(--red)',
+    ahorro:  'var(--amber)', transferencia: 'var(--accent)',
+  }
+  const color = TIPO_COLORS[tx.tipo_movimiento] || 'var(--text3)'
+  const signo = tx.tipo_movimiento === 'gasto' ? '-' : '+'
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom, 16px))' }}>
+        <div className="modal-handle" />
+
+        {/* Encabezado con color según tipo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: color, flexShrink: 0 }} />
+          <h2 style={{ margin: 0, fontSize: '1.15rem', flex: 1, lineHeight: 1.3 }}>{nombre}</h2>
+        </div>
+
+        {/* Valor grande */}
+        <div style={{ textAlign: 'center', padding: '1rem 0 1.25rem' }}>
+          <p className="mono" style={{ fontSize: '2rem', fontWeight: 700, color }}>
+            {signo}{formatCOP(tx.valor)}
+          </p>
+          <span style={{
+            display: 'inline-block', marginTop: 6, padding: '3px 10px',
+            borderRadius: 20, fontSize: '0.75rem', fontWeight: 700,
+            background: color + '22', color,
+          }}>
+            {tx.tipo_movimiento.charAt(0).toUpperCase() + tx.tipo_movimiento.slice(1)}
+          </span>
+        </div>
+
+        {/* Tabla de campos */}
+        <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: '1.25rem' }}>
+          {[
+            { label: 'Fecha',        value: dateLabel(tx.fecha) },
+            { label: 'Categoría',    value: catNom },
+            { label: 'Medio de pago', value: tx.medio_pago || '—' },
+            { label: 'Observaciones', value: tx.observaciones || '—' },
+          ].map((row, i, arr) => (
+            <div key={row.label} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '0.7rem 1rem',
+              borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none',
+              background: i % 2 === 0 ? 'var(--bg2)' : 'var(--bg3)',
+            }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text2)', fontWeight: 500 }}>{row.label}</span>
+              <span style={{ fontSize: '0.875rem', color: 'var(--text)', textAlign: 'right', maxWidth: '60%' }}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Acciones */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onClose}
+            style={{ flex: 1, justifyContent: 'center' }}>Cerrar</button>
+          <button className="btn btn-ghost" onClick={onEditar}
+            style={{ flex: 1, justifyContent: 'center', color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+            ✏️ Editar
+          </button>
+          <button className="btn btn-danger btn-sm" onClick={onEliminar}
+            style={{ flexShrink: 0, justifyContent: 'center', padding: '0.6rem 1rem' }}>
+            🗑
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Página principal ───────────────────────────────────────────────────────────
 export default function TransaccionesPage({ refresh }) {
   const { user } = useAuth()
   const now = new Date()
-  const [periodo, setPeriodo]   = useState({ anio: now.getFullYear(), mes: now.getMonth() + 1 })
-  const [txs, setTxs]           = useState([])
+
+  // ─ Estado ─
+  const [periodo,     setPeriodo]     = useState({ anio: now.getFullYear(), mes: now.getMonth() + 1 })
+  const [txs,         setTxs]         = useState([])
   const [conceptoMap, setConceptoMap] = useState({})
-  const [catMap, setCatMap]           = useState({})
-  const [loading, setLoading]   = useState(true)
-  const [filtro, setFiltro]     = useState('todos')
-  const [busqueda, setBusqueda] = useState('')
+  const [catMap,      setCatMap]      = useState({})
+  const [loading,     setLoading]     = useState(true)
+  const [filtro,      setFiltro]      = useState('todos')
+  const [busqueda,    setBusqueda]    = useState('')
+
+  // Detalle + edición
+  const [detalle,     setDetalle]     = useState(null)   // tx seleccionada para ver detalle
+  const [editando,    setEditando]    = useState(null)   // tx a editar en el modal
 
   const { anio, mes } = periodo
   const firstDay = `${anio}-${String(mes).padStart(2,'0')}-01`
@@ -27,7 +112,7 @@ export default function TransaccionesPage({ refresh }) {
         .eq('user_id', user.id)
         .gte('fecha', firstDay)
         .lte('fecha', lastDay)
-        .order('fecha', { ascending: false })
+        .order('fecha',      { ascending: false })
         .order('created_at', { ascending: false }),
       supabase.from('conceptos').select('id, nombre, categoria_id').eq('user_id', user.id),
       supabase.from('categorias').select('id, nombre').eq('user_id', user.id),
@@ -58,22 +143,38 @@ export default function TransaccionesPage({ refresh }) {
   const totales = filtered.reduce((acc, t) => {
     const v = Number(t.valor)
     if (t.tipo_movimiento === 'ingreso') acc.ingresos += v
-    else if (t.tipo_movimiento === 'gasto') acc.gastos += v
-    else if (t.tipo_movimiento === 'ahorro') acc.ahorro += v
+    else if (t.tipo_movimiento === 'gasto')  acc.gastos  += v
+    else if (t.tipo_movimiento === 'ahorro') acc.ahorro  += v
     return acc
   }, { ingresos: 0, gastos: 0, ahorro: 0 })
 
   async function deleteTx(id) {
     if (!confirm('¿Eliminar este movimiento?')) return
     await supabase.from('transacciones').delete().eq('id', id).eq('user_id', user.id)
+    setDetalle(null)
     load()
   }
 
-  const TIPO_COLORS = { ingreso: 'var(--green)', gasto: 'var(--red)', ahorro: 'var(--amber)', transferencia: 'var(--accent)' }
+  function abrirEdicion(tx) {
+    setDetalle(null)         // cerrar drawer de detalle
+    setEditando(tx)          // abrir modal de edición
+  }
+
+  function cerrarEdicion() { setEditando(null) }
+
+  function handleSaved() {
+    setEditando(null)
+    load()
+  }
+
+  const TIPO_COLORS = {
+    ingreso: 'var(--green)', gasto: 'var(--red)',
+    ahorro: 'var(--amber)', transferencia: 'var(--accent)',
+  }
 
   return (
     <div className="page animate-in">
-      {/* Header con selector de mes */}
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
         <div>
           <h1 style={{ fontSize: '1.5rem' }}>Movimientos</h1>
@@ -86,6 +187,7 @@ export default function TransaccionesPage({ refresh }) {
         value={busqueda} onChange={e => setBusqueda(e.target.value)}
         style={{ marginBottom: '0.75rem' }} />
 
+      {/* Filtros */}
       <div style={{ display: 'flex', gap: 6, marginBottom: '0.75rem', overflowX: 'auto', paddingBottom: 2 }}>
         {[
           { key: 'todos',   label: 'Todos'    },
@@ -137,7 +239,19 @@ export default function TransaccionesPage({ refresh }) {
             const nombre   = concepto?.nombre || t.observaciones || 'Sin concepto'
             const catNom   = concepto?.categoria || ''
             return (
-              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none' }}>
+              <div
+                key={t.id}
+                onClick={() => setDetalle(t)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 16px',
+                  borderBottom: i < filtered.length - 1 ? '1px solid var(--border)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'background 0.12s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg3)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
                 <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: TIPO_COLORS[t.tipo_movimiento] || 'var(--text3)' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nombre}</p>
@@ -149,15 +263,34 @@ export default function TransaccionesPage({ refresh }) {
                   <p className="mono" style={{ fontWeight: 600, fontSize: '0.9rem', color: TIPO_COLORS[t.tipo_movimiento] || 'var(--text)' }}>
                     {t.tipo_movimiento === 'gasto' ? '-' : '+'}{formatCOP(t.valor)}
                   </p>
-                  <button onClick={() => deleteTx(t.id)}
-                    style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 0' }}>
-                    eliminar
-                  </button>
+                  {/* Indicador visual de que es tappable */}
+                  <span style={{ color: 'var(--text3)', fontSize: '0.7rem' }}>›</span>
                 </div>
               </div>
             )
           })}
         </div>
+      )}
+
+      {/* Drawer de detalle */}
+      {detalle && (
+        <DetalleDrawer
+          tx={detalle}
+          conceptoMap={conceptoMap}
+          catMap={catMap}
+          onClose={() => setDetalle(null)}
+          onEditar={() => abrirEdicion(detalle)}
+          onEliminar={() => deleteTx(detalle.id)}
+        />
+      )}
+
+      {/* Modal de edición — se monta localmente, no en App.jsx */}
+      {editando && (
+        <TransactionModal
+          editData={editando}
+          onClose={cerrarEdicion}
+          onSaved={handleSaved}
+        />
       )}
     </div>
   )
