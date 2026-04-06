@@ -99,7 +99,6 @@ function DetalleDrawer({ tx, conceptoMap, catMap, onClose, onEditar, onEliminar 
     </div>
   )
 }
-}
 
 // ── Página principal ───────────────────────────────────────────────────────────
 export default function TransaccionesPage({ refresh }) {
