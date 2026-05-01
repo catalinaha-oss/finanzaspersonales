@@ -21,6 +21,7 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
   const [categorias,     setCategorias]     = useState([])
   const [todosConceptos, setTodosConceptos] = useState([])
   const [metas,          setMetas]          = useState([])
+  const [tarjetas,       setTarjetas]       = useState([])
 
   const [catFilter, setCatFilter] = useState(prefill?.categoria_id || '')
   const [tipo,      setTipo]      = useState(
@@ -33,6 +34,7 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
                                             : (prefill?.monto_presupuestado ? String(Math.round(prefill.monto_presupuestado)) : ''),
     medio_pago:    editData?.medio_pago     || 'débito',
     observaciones: editData?.observaciones  || '',
+    tarjeta_id:    editData?.tarjeta_id     || '',
   })
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
@@ -42,16 +44,19 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
 
   useEffect(() => {
     async function load() {
-      const [{ data: cats }, { data: cons }, { data: mts }] = await Promise.all([
+      const [{ data: cats }, { data: cons }, { data: mts }, { data: tcs }] = await Promise.all([
         supabase.from('categorias').select('id, nombre, tipo').eq('user_id', user.id).order('nombre'),
         supabase.from('conceptos').select('id, nombre, categoria_id, meta_id')
           .eq('user_id', user.id).eq('activo', true).order('nombre'),
         supabase.from('metas').select('id, nombre, valor_actual, valor_meta')
           .eq('user_id', user.id).eq('activo', true).order('nombre'),
+        supabase.from('tarjetas_credito').select('id, nombre, ultimos_digitos')
+          .eq('user_id', user.id).order('nombre'),
       ])
       setCategorias(cats || [])
       setTodosConceptos(cons || [])
       setMetas(mts || [])
+      setTarjetas(tcs || [])
 
       // En modo edición, deducir catFilter del concepto ya seleccionado
       if (editData?.concepto_id && cons) {
@@ -128,6 +133,7 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
           concepto_id:     form.concepto_id,
           medio_pago:      form.medio_pago || null,
           observaciones:   form.observaciones || null,
+          tarjeta_id:      form.medio_pago === 'TC' ? (form.tarjeta_id || null) : null,
         })
         .eq('id', editData.id)
         .eq('user_id', user.id)
@@ -162,6 +168,7 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
         concepto_id:     form.concepto_id,
         medio_pago:      form.medio_pago || null,
         observaciones:   form.observaciones || null,
+        tarjeta_id:      form.medio_pago === 'TC' ? (form.tarjeta_id || null) : null,
         origen:          'manual',
       })
 
@@ -302,7 +309,7 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
             <div className="input-group">
               <label>Medio de pago</label>
               <select className="input" value={form.medio_pago}
-                onChange={e => setForm(p => ({ ...p, medio_pago: e.target.value }))}>
+                onChange={e => setForm(p => ({ ...p, medio_pago: e.target.value, tarjeta_id: '' }))}>
                 <option value="débito">Débito</option>
                 <option value="TC">Tarjeta crédito</option>
                 <option value="efectivo">Efectivo</option>
@@ -311,6 +318,29 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
               </select>
             </div>
           </div>
+
+          {/* Selector tarjeta de crédito */}
+          {form.medio_pago === 'TC' && (
+            <div className="input-group">
+              <label>Tarjeta de crédito</label>
+              {tarjetas.length === 0 ? (
+                <p style={{ fontSize: '0.78rem', color: 'var(--text3)', marginTop: 2 }}>
+                  No tienes tarjetas registradas. Ve a Config → Administrar tarjetas.
+                </p>
+              ) : (
+                <select className="input" value={form.tarjeta_id}
+                  onChange={e => setForm(p => ({ ...p, tarjeta_id: e.target.value }))}
+                  style={{ borderColor: !form.tarjeta_id ? 'rgba(247,180,79,0.5)' : undefined }}>
+                  <option value="">— Selecciona una tarjeta —</option>
+                  {tarjetas.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.nombre}{t.ultimos_digitos ? ` ···· ${t.ultimos_digitos}` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           <div className="input-group">
             <label>Observaciones (opcional)</label>

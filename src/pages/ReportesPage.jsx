@@ -475,6 +475,175 @@ function VistaEditor({ categorias, conceptos, onRefresh }) {
   )
 }
 
+// ── VISTA 4: Reporte de Tarjetas de Crédito ──────────────────
+function VistaTarjetasReporte() {
+  const { user } = useAuth()
+  const [loading,  setLoading]  = useState(true)
+  const [meses,    setMeses]    = useState([])  // [{label, cuotas_total, num_deudas}]
+  const [resumen,  setResumen]  = useState([])  // por tarjeta
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data: tarjetas } = await supabase
+        .from('tarjetas_credito').select('id, nombre').eq('user_id', user.id)
+      const { data: deudas } = await supabase
+        .from('deudas_tc').select('id, tarjeta_id, descripcion, cuotas_totales, cuotas_pagadas, cuota_mes, saldo_pendiente')
+        .eq('user_id', user.id)
+
+      if (!deudas || deudas.length === 0) { setMeses([]); setResumen([]); setLoading(false); return }
+
+      // Proyección mes a mes de los próximos 12 meses
+      const now = new Date()
+      const mesesData = []
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+        const label = d.toLocaleString('es-CO', { month: 'short', year: '2-digit' })
+        let cuotas_total = 0
+        let num_deudas   = 0
+        for (const deu of deudas) {
+          const pagadas   = deu.cuotas_pagadas || 0
+          const totales   = deu.cuotas_totales || 1
+          const cuotaMes  = Number(deu.cuota_mes) || 0
+          const restantes = totales - pagadas
+          if (restantes > i) {   // en el mes i aún hay cuota
+            cuotas_total += cuotaMes
+            num_deudas++
+          }
+        }
+        mesesData.push({ label, cuotas_total, num_deudas })
+      }
+      setMeses(mesesData)
+
+      // Resumen por tarjeta
+      const tcMap = {}
+      for (const t of tarjetas || []) tcMap[t.id] = { nombre: t.nombre, saldo: 0, cuota_mes: 0, deudas: 0 }
+      for (const d of deudas) {
+        if (!tcMap[d.tarjeta_id]) continue
+        tcMap[d.tarjeta_id].saldo    += Number(d.saldo_pendiente) || 0
+        tcMap[d.tarjeta_id].cuota_mes+= Number(d.cuota_mes)       || 0
+        tcMap[d.tarjeta_id].deudas++
+      }
+      setResumen(Object.values(tcMap))
+      setLoading(false)
+    }
+    load()
+  }, [user.id])
+
+  const COP = v => new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(v)
+  const maxCuota = Math.max(...meses.map(m => m.cuotas_total), 1)
+  const maxDeudas = Math.max(...meses.map(m => m.num_deudas), 1)
+
+  if (loading) return <div style={{ textAlign:'center', padding:'3rem', color:'var(--text2)' }}>Cargando...</div>
+
+  if (meses.length === 0) return (
+    <div style={{ textAlign:'center', padding:'3rem 0', color:'var(--text2)' }}>
+      <p style={{ fontSize:'1rem', marginBottom:8 }}>Sin deudas registradas</p>
+      <p style={{ fontSize:'0.82rem' }}>Ve a Config → Tarjetas de crédito para agregar tus deudas.</p>
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ marginBottom:18 }}>
+        <h2 style={{ fontSize:'1.1rem', marginBottom:3 }}>Proyección tarjetas de crédito</h2>
+        <p style={{ color:'var(--text2)', fontSize:'0.82rem' }}>Cuotas mensuales y número de deudas activas — próximos 12 meses</p>
+      </div>
+
+      {/* KPIs resumen por tarjeta */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:10, marginBottom:20 }}>
+        {resumen.map((tc,i) => (
+          <div key={i} className="card card-sm">
+            <p style={{ fontSize:'0.68rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'.06em', color:'var(--text3)', marginBottom:4 }}>{tc.nombre}</p>
+            <p className="mono" style={{ fontSize:'1rem', fontWeight:700, color:'var(--red)', marginBottom:2 }}>{COP(tc.saldo)}</p>
+            <p style={{ fontSize:'0.72rem', color:'var(--text2)' }}>Cuota mes: {COP(tc.cuota_mes)}</p>
+            <p style={{ fontSize:'0.72rem', color:'var(--text3)' }}>{tc.deudas} deuda{tc.deudas!==1?'s':''}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Gráfico de barras + línea */}
+      <div className="card">
+        <p style={{ fontSize:'0.68rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'.06em', color:'var(--text3)', marginBottom:16 }}>
+          Cuotas por mes (barras) · N° deudas activas (línea)
+        </p>
+        <div style={{ position:'relative', height:220, display:'flex', alignItems:'flex-end', gap:6, paddingBottom:24 }}>
+          {/* Línea de deudas — SVG overlay */}
+          <svg style={{ position:'absolute', top:0, left:0, width:'100%', height:'calc(100% - 24px)', overflow:'visible', pointerEvents:'none' }}>
+            {meses.map((m, i) => {
+              const totalBars = meses.length
+              const barW = 100 / totalBars
+              const cx = (barW * i + barW / 2)
+              const cy = 100 - (m.num_deudas / maxDeudas) * 90
+              return (
+                <g key={i}>
+                  {i > 0 && (
+                    <line
+                      x1={`${(barW*(i-1)+barW/2)}%`}
+                      y1={`${100 - (meses[i-1].num_deudas/maxDeudas)*90}%`}
+                      x2={`${cx}%`}
+                      y2={`${cy}%`}
+                      stroke="var(--amber)" strokeWidth="2" strokeDasharray="4 2"
+                    />
+                  )}
+                  <circle cx={`${cx}%`} cy={`${cy}%`} r="4" fill="var(--amber)" />
+                  <text x={`${cx}%`} y={`${cy-8}%`} textAnchor="middle" fontSize="9" fill="var(--amber)" fontFamily="var(--mono)">{m.num_deudas}</text>
+                </g>
+              )
+            })}
+          </svg>
+          {/* Barras */}
+          {meses.map((m, i) => {
+            const pct = maxCuota > 0 ? (m.cuotas_total / maxCuota) * 190 : 0
+            return (
+              <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', height:'100%' }}>
+                <div title={COP(m.cuotas_total)} style={{ width:'80%', height: pct, background:'rgba(79,142,247,0.55)', borderRadius:'4px 4px 0 0', minHeight: m.cuotas_total>0?2:0, transition:'height 0.3s' }} />
+              </div>
+            )
+          })}
+        </div>
+        {/* Eje X — labels */}
+        <div style={{ display:'flex', gap:6 }}>
+          {meses.map((m,i) => (
+            <div key={i} style={{ flex:1, textAlign:'center', fontSize:'0.6rem', color:'var(--text3)', fontWeight:600 }}>{m.label}</div>
+          ))}
+        </div>
+        {/* Leyenda */}
+        <div style={{ display:'flex', gap:16, marginTop:14 }}>
+          <span style={{ fontSize:'0.72rem', color:'var(--text3)', display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ display:'inline-block', width:12, height:12, borderRadius:2, background:'rgba(79,142,247,0.55)' }}/> Cuotas del mes
+          </span>
+          <span style={{ fontSize:'0.72rem', color:'var(--amber)', display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ display:'inline-block', width:12, height:3, background:'var(--amber)', borderRadius:2 }}/> N° deudas activas
+          </span>
+        </div>
+      </div>
+
+      {/* Tabla detalle mensual */}
+      <div className="card" style={{ padding:0, overflow:'hidden', marginTop:14 }}>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr>
+              <TH>Mes</TH>
+              <TH right>Cuota total</TH>
+              <TH right>Deudas activas</TH>
+            </tr>
+          </thead>
+          <tbody>
+            {meses.map((m,i) => (
+              <tr key={i} style={{ borderTop:'1px solid var(--border)' }}>
+                <TD>{m.label}</TD>
+                <TD right mono color="var(--accent)">{COP(m.cuotas_total)}</TD>
+                <TD right>{m.num_deudas} deuda{m.num_deudas!==1?'s':''}</TD>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ── PÁGINA PRINCIPAL REPORTES ─────────────────────────────────
 export default function ReportesPage() {
   const { user } = useAuth()
@@ -500,6 +669,7 @@ export default function ReportesPage() {
     { id: 'analisis', label: 'Análisis mensual' },
     { id: 'radar',    label: 'Radar histórico'  },
     { id: 'editor',   label: 'Editor presupuesto'},
+    { id: 'tarjetas', label: 'Tarjetas de crédito'},
   ]
 
   return (
@@ -539,6 +709,7 @@ export default function ReportesPage() {
             {vista==='analisis' && <VistaAnalisis categorias={categorias} conceptos={conceptos} />}
             {vista==='radar'    && <VistaRadar    categorias={categorias} conceptos={conceptos} />}
             {vista==='editor'   && <VistaEditor   categorias={categorias} conceptos={conceptos} onRefresh={()=>setRefreshKey(k=>k+1)} />}
+            {vista==='tarjetas' && <VistaTarjetasReporte />}
           </>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import TarjetasPage from './TarjetasPage'
 
 const TIPOS          = ['Ingreso', 'Gasto', 'Ahorro/Inversión']
 const TIPO_COLORS    = { 'Ingreso': 'var(--green)', 'Gasto': 'var(--red)', 'Ahorro/Inversión': 'var(--amber)' }
@@ -16,7 +17,7 @@ export default function ConfigPage() {
   const [txCats,      setTxCats]      = useState({})
   const [loading,     setLoading]     = useState(true)
   const [errorMsg,    setErrorMsg]    = useState('')
-  const [vista,       setVista]       = useState('categorias') // 'categorias' | 'conceptos'
+  const [vista,       setVista]       = useState('menu') // 'menu' | 'categorias' | 'conceptos' | 'tarjetas'
   const [catSel,      setCatSel]      = useState(null)
   const [modalCat,    setModalCat]    = useState(false)
   const [modalCon,    setModalCon]    = useState(false)
@@ -131,13 +132,64 @@ export default function ConfigPage() {
             <h1 style={{ fontSize: '1.3rem' }}>{catSel?.nombre}</h1>
             <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{conceptosDeCat.length} concepto{conceptosDeCat.length !== 1 ? 's' : ''}</p>
           </div>
+        ) : vista === 'categorias' ? (
+          <div>
+            <button onClick={() => setVista('menu')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>← Configuración</button>
+            <h1>Categorías y conceptos</h1>
+            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{categorias.length} categorías · {conceptos.length} conceptos</p>
+          </div>
+        ) : vista === 'tarjetas' ? (
+          <div>
+            <button onClick={() => setVista('menu')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>← Configuración</button>
+            <h1>Tarjetas de crédito</h1>
+          </div>
         ) : (
           <div>
             <h1>Configuración</h1>
-            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{categorias.length} categorías · {conceptos.length} conceptos</p>
+            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{user.email}</p>
           </div>
         )}
       </div>
+
+      {/* ── VISTA MENÚ PRINCIPAL ── */}
+      {vista === 'menu' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
+          <button
+            onClick={() => { setVista('categorias'); load() }}
+            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font)', width: '100%' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(79,142,247,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+            </div>
+            <div>
+              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Administrar categorías</p>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>Categorías, conceptos y presupuestos</p>
+            </div>
+            <svg style={{ marginLeft: 'auto', color: 'var(--text3)' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+
+          <button
+            onClick={() => setVista('tarjetas')}
+            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font)', width: '100%' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(247,180,79,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="1.8" strokeLinecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>
+            </div>
+            <div>
+              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Administrar tarjetas de crédito</p>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>Deudas, cuotas y carga de extractos</p>
+            </div>
+            <svg style={{ marginLeft: 'auto', color: 'var(--text3)' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+
+          <div style={{ marginTop: '0.5rem', padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12 }}>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: 6 }}>Cuenta activa</p>
+            <p style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--text2)', marginBottom: 12 }}>{user.email}</p>
+            <button className="btn btn-ghost w-full" onClick={signOut} style={{ justifyContent: 'center', color: 'var(--red)', borderColor: 'rgba(247,95,95,0.3)' }}>Cerrar sesión</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── VISTA TARJETAS ── */}
+      {vista === 'tarjetas' && <TarjetasPage />}
 
       {errorMsg && <div style={{ background: 'rgba(247,95,95,0.1)', border: '1px solid rgba(247,95,95,0.3)', borderRadius: 8, padding: '0.75rem 1rem', color: 'var(--red)', fontSize: '0.85rem', marginBottom: '1rem' }}>{errorMsg}</div>}
 
@@ -177,14 +229,7 @@ export default function ConfigPage() {
             </div>
           ))}
 
-          {/* Cuenta */}
-          <div className="divider" />
-          <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Cuenta</h2>
-          <div className="card" style={{ marginBottom: '0.75rem' }}>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text2)', marginBottom: 3 }}>Usuario activo</p>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: '0.875rem' }}>{user.email}</p>
-          </div>
-          <button className="btn btn-ghost w-full" onClick={signOut} style={{ justifyContent: 'center', color: 'var(--red)', borderColor: 'rgba(247,95,95,0.3)' }}>Cerrar sesión</button>
+          {/* fin lista categorías */}
         </>
       )}
 
