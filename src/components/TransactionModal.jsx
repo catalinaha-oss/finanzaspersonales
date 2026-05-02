@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { today } from '../lib/utils'
 
+const EDGE_SMS_URL = 'https://puvqxgsodwyhfdfnatpv.supabase.co/functions/v1/analizar-sms'
+
 /**
  * TransactionModal
  *
@@ -36,9 +38,15 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
     observaciones: editData?.observaciones  || '',
     tarjeta_id:    editData?.tarjeta_id     || '',
   })
-  const [saving, setSaving] = useState(false)
-  const [error,  setError]  = useState('')
-  const [ready,  setReady]  = useState(false)
+  const [saving,     setSaving]     = useState(false)
+  const [error,      setError]      = useState('')
+  const [ready,      setReady]      = useState(false)
+
+  // ── Estado SMS ──
+  const [mostrarSMS,  setMostrarSMS]  = useState(false)
+  const [textoSMS,    setTextoSMS]    = useState('')
+  const [analizandoSMS, setAnalizandoSMS] = useState(false)
+  const [errSMS,      setErrSMS]      = useState('')
 
   const valorAnterior = editData?.valor ? Number(editData.valor) : 0
 
@@ -58,7 +66,6 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
       setMetas(mts || [])
       setTarjetas(tcs || [])
 
-      // En modo edición, deducir catFilter del concepto ya seleccionado
       if (editData?.concepto_id && cons) {
         const con = cons.find(c => c.id === editData.concepto_id)
         if (con) setCatFilter(con.categoria_id || '')
@@ -106,6 +113,78 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
     setForm(p => ({ ...p, concepto_id: '' }))
   }
 
+  // ── Analizar SMS ──
+  async function analizarSMS() {
+    if (!textoSMS.trim()) return
+    setAnalizandoSMS(true)
+    setErrSMS('')
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('Sesión expirada.')
+
+      const res = await fetch(EDGE_SMS_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey':        session.access_token,
+        },
+        body: JSON.stringify({ sms_texto: textoSMS.trim() })
+      })
+
+      if (!res.ok) {
+        const errBody = await res.text()
+        throw new Error(`Error del servidor (${res.status}): ${errBody}`)
+      }
+
+      const parsed = await res.json()
+      if (parsed.error) throw new Error(parsed.error)
+
+      // Pre-llenar el formulario con los datos extraídos
+      const nuevoTipo = parsed.tipo_movimiento || 'gasto'
+      setTipo(nuevoTipo)
+      setCatFilter('')
+
+      // Buscar categoría sugerida por nombre
+      const catSugerida = categorias.find(c =>
+        c.nombre.toLowerCase().includes((parsed.categoria_sugerida || '').toLowerCase()) ||
+        (parsed.categoria_sugerida || '').toLowerCase().includes(c.nombre.toLowerCase())
+      )
+
+      // Buscar concepto dentro de la categoría sugerida
+      let conceptoSugerido = ''
+      if (catSugerida) {
+        setCatFilter(catSugerida.id)
+        // Buscar el primer concepto activo de esa categoría
+        const conEnCat = todosConceptos.find(c =>
+          c.categoria_id === catSugerida.id &&
+          (nuevoTipo === 'ingreso' ? catMap[c.categoria_id]?.tipo === 'Ingreso'
+            : nuevoTipo === 'ahorro' ? catMap[c.categoria_id]?.tipo === 'Ahorro/Inversión'
+            : catMap[c.categoria_id]?.tipo === 'Gasto')
+        )
+        if (conEnCat) conceptoSugerido = conEnCat.id
+      }
+
+      setForm(p => ({
+        ...p,
+        valor:         parsed.valor ? String(Math.round(parsed.valor)) : p.valor,
+        fecha:         parsed.fecha || p.fecha,
+        medio_pago:    parsed.medio_pago || 'débito',
+        observaciones: parsed.observaciones || p.observaciones,
+        concepto_id:   conceptoSugerido,
+      }))
+
+      setMostrarSMS(false)
+      setTextoSMS('')
+
+    } catch (err) {
+      setErrSMS('No se pudo interpretar: ' + err.message)
+    } finally {
+      setAnalizandoSMS(false)
+    }
+  }
+
   async function handleSave(e) {
     e.preventDefault()
     setError('')
@@ -123,7 +202,6 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
     setSaving(true)
 
     if (isEdit) {
-      // ── MODO EDICIÓN ──────────────────────────────────────────────────────
       const { error: txErr } = await supabase
         .from('transacciones')
         .update({
@@ -144,7 +222,6 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
         return
       }
 
-      // Ajustar meta: solo si el tipo sigue siendo ahorro y hay meta asociada
       if (tipo === 'ahorro' && editData.tipo_movimiento === 'ahorro' && metaDelConcepto) {
         const diff = valorNum - valorAnterior
         if (diff !== 0) {
@@ -159,7 +236,6 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
       }
 
     } else {
-      // ── MODO CREACIÓN ────────────────────────────────────────────────────
       const { error: txErr } = await supabase.from('transacciones').insert({
         user_id:         user.id,
         fecha:           form.fecha,
@@ -217,21 +293,83 @@ export default function TransactionModal({ onClose, onSaved, prefill, editData }
 
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
 
-          {/* Tipo */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-            {TIPOS.map(t => (
-              <button key={t.id} type="button" onClick={() => cambiarTipo(t.id)}
+          {/* ── Fila tipo + botón SMS ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
+              {TIPOS.map(t => (
+                <button key={t.id} type="button" onClick={() => cambiarTipo(t.id)}
+                  style={{
+                    padding: '0.5rem', borderRadius: 8, border: 'none', cursor: 'pointer',
+                    fontFamily: 'var(--font)', fontSize: '0.85rem', fontWeight: 700,
+                    background: tipo === t.id ? t.color : 'var(--bg3)',
+                    color: tipo === t.id ? '#fff' : 'var(--text2)',
+                    transition: 'background 0.15s',
+                  }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Botón cargar SMS — solo en modo creación */}
+            {!isEdit && (
+              <button
+                type="button"
+                onClick={() => { setMostrarSMS(v => !v); setErrSMS('') }}
                 style={{
-                  padding: '0.5rem', borderRadius: 8, border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--font)', fontSize: '0.85rem', fontWeight: 700,
-                  background: tipo === t.id ? t.color : 'var(--bg3)',
-                  color: tipo === t.id ? '#fff' : 'var(--text2)',
-                  transition: 'background 0.15s',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                  padding: '0.45rem 0.75rem', borderRadius: 8, border: '1px dashed var(--border2)',
+                  background: mostrarSMS ? 'rgba(79,142,247,0.08)' : 'transparent',
+                  color: mostrarSMS ? 'var(--accent)' : 'var(--text2)',
+                  cursor: 'pointer', fontSize: '0.82rem', fontFamily: 'var(--font)',
+                  transition: 'all 0.15s',
                 }}>
-                {t.label}
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+                </svg>
+                {mostrarSMS ? 'Ocultar SMS' : 'Cargar SMS del banco'}
               </button>
-            ))}
+            )}
           </div>
+
+          {/* ── Panel SMS ── */}
+          {mostrarSMS && !isEdit && (
+            <div style={{
+              background: 'var(--bg3)', borderRadius: 10, padding: '0.85rem',
+              display: 'flex', flexDirection: 'column', gap: '0.65rem',
+              border: '1px solid var(--border)'
+            }}>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>
+                Pega el mensaje de texto del banco o app de pagos:
+              </p>
+              <textarea
+                value={textoSMS}
+                onChange={e => setTextoSMS(e.target.value)}
+                placeholder={'Ej: Nequi: Pagaste $10782.00 en UBER RIDES .'}
+                rows={3}
+                style={{
+                  width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)',
+                  borderRadius: 8, padding: '0.6rem 0.75rem', color: 'var(--text)',
+                  fontFamily: 'var(--mono)', fontSize: '0.78rem', resize: 'none',
+                  boxSizing: 'border-box', lineHeight: 1.5,
+                }}
+              />
+              {errSMS && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--red)' }}>{errSMS}</p>
+              )}
+              <button
+                type="button"
+                onClick={analizarSMS}
+                disabled={analizandoSMS || !textoSMS.trim()}
+                className="btn btn-primary"
+                style={{ justifyContent: 'center', fontSize: '0.82rem' }}>
+                {analizandoSMS
+                  ? <><span style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite', marginRight: 8 }} />Interpretando...</>
+                  : 'Interpretar con IA →'}
+              </button>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+          )}
 
           {/* Valor */}
           <div className="input-group">

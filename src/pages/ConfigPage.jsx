@@ -1,376 +1,342 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import TarjetasPage from './TarjetasPage'
-
-const TIPOS          = ['Ingreso', 'Gasto', 'Ahorro/Inversión']
-const TIPO_COLORS    = { 'Ingreso': 'var(--green)', 'Gasto': 'var(--red)', 'Ahorro/Inversión': 'var(--amber)' }
-const PERIODICIDADES = ['Mensual','Bimensual','Trimestral','Semestral','Anual']
+import TarjetasPage   from './TarjetasPage'
+import NominaUploader from '../components/NominaUploader'
 
 export default function ConfigPage() {
-  const { user, signOut } = useAuth()
+  const { user } = useAuth()
 
-  // ── hooks al inicio, sin excepción ──
-  const [categorias,  setCategorias]  = useState([])
-  const [conceptos,   setConceptos]   = useState([])
-  const [txConceptos, setTxConceptos] = useState({})
-  const [txCats,      setTxCats]      = useState({})
-  const [loading,     setLoading]     = useState(true)
-  const [errorMsg,    setErrorMsg]    = useState('')
-  const [vista,       setVista]       = useState('menu') // 'menu' | 'categorias' | 'conceptos' | 'tarjetas'
-  const [catSel,      setCatSel]      = useState(null)
-  const [modalCat,    setModalCat]    = useState(false)
-  const [modalCon,    setModalCon]    = useState(false)
-  const [editandoCat, setEditCat]     = useState(null)
-  const [editandoCon, setEditCon]     = useState(null)
-  const [formCat,  setFormCat]  = useState({ nombre: '', tipo: 'Gasto' })
-  const [formCon,  setFormCon]  = useState({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '', meta_id: '' })
-  const [metas,       setMetas]       = useState([])
-  const [saving,      setSaving]      = useState(false)
+  // ── todos los hooks al inicio ──
+  const [vista,         setVista]         = useState('menu')   // 'menu' | 'categorias' | 'tarjetas'
+  const [modalNomina,   setModalNomina]   = useState(false)
+  const [categorias,    setCategorias]    = useState([])
+  const [conceptos,     setConceptos]     = useState([])
+  const [loading,       setLoading]       = useState(false)
+  const [editCat,       setEditCat]       = useState(null)
+  const [editCon,       setEditCon]       = useState(null)
+  const [formCat,       setFormCat]       = useState({ nombre: '', tipo: 'Gasto' })
+  const [formCon,       setFormCon]       = useState({ nombre: '', categoria_id: '', activo: true })
+  const [savingCat,     setSavingCat]     = useState(false)
+  const [savingCon,     setSavingCon]     = useState(false)
+  const [catFiltro,     setCatFiltro]     = useState('')
 
-  async function load() {
-    setLoading(true); setErrorMsg('')
-    const [
-      { data: cats, error: e1 },
-      { data: cons },
-      { data: txs  },
-      { data: mts  },
-    ] = await Promise.all([
-      supabase.from('categorias').select('id, tipo, nombre, orden').eq('user_id', user.id).order('tipo').order('nombre'),
-      supabase.from('conceptos').select('id, nombre, categoria_id, meta_id, esencial, fijo_variable, periodicidad, monto_presupuestado, dia_pago, mes_ciclo, dia_vencimiento, activo').eq('user_id', user.id).order('nombre'),
-      supabase.from('transacciones').select('concepto_id').eq('user_id', user.id).not('concepto_id', 'is', null),
-      supabase.from('metas').select('id, nombre').eq('user_id', user.id).eq('activo', true).order('nombre'),
+  async function loadCatalogo() {
+    setLoading(true)
+    const [{ data: cats }, { data: cons }] = await Promise.all([
+      supabase.from('categorias').select('id, nombre, tipo').order('nombre'),
+      supabase.from('conceptos').select('id, nombre, categoria_id, activo')
+        .eq('user_id', user.id).order('nombre'),
     ])
-    if (e1) { setErrorMsg('Error: ' + e1.message); setLoading(false); return }
-    const txCon = {}
-    for (const t of txs || []) if (t.concepto_id) txCon[t.concepto_id] = (txCon[t.concepto_id] || 0) + 1
-    const txCat = {}
-    for (const c of cons || []) if (txCon[c.id]) txCat[c.categoria_id] = (txCat[c.categoria_id] || 0) + txCon[c.id]
-    setCategorias(cats || []); setConceptos(cons || []); setMetas(mts || [])
-    setTxConceptos(txCon); setTxCats(txCat); setLoading(false)
+    setCategorias(cats || [])
+    setConceptos(cons || [])
+    setLoading(false)
   }
 
-  useEffect(() => { load() }, [user.id])
+  useEffect(() => {
+    if (vista === 'categorias') loadCatalogo()
+  }, [vista])
 
   // ── Categorías ──
-  function abrirNuevaCat() { setEditCat(null); setFormCat({ nombre: '', tipo: 'Gasto' }); setModalCat(true) }
-  function abrirEditarCat(cat) { setEditCat(cat.id); setFormCat({ nombre: cat.nombre, tipo: cat.tipo }); setModalCat(true) }
-  async function guardarCat(e) {
-    e.preventDefault(); if (!formCat.nombre.trim()) return; setSaving(true)
-    const payload = { nombre: formCat.nombre.trim(), tipo: formCat.tipo }
-    const { error } = editandoCat
-      ? await supabase.from('categorias').update(payload).eq('id', editandoCat).eq('user_id', user.id)
-      : await supabase.from('categorias').insert({ ...payload, user_id: user.id, orden: categorias.length })
-    setSaving(false); if (error) { alert('Error: ' + error.message); return }
-    setModalCat(false); load()
-  }
-  async function eliminarCat(cat) {
-    const activos = conceptos.filter(c => c.categoria_id === cat.id && c.activo)
-    if (activos.length > 0) { alert(`Tiene ${activos.length} concepto(s) activo(s). Primero elimínalos.`); return }
-    const ids = conceptos.filter(c => c.categoria_id === cat.id).map(c => c.id)
-    if (ids.length > 0) {
-      const { count } = await supabase.from('transacciones').select('id', { count: 'exact', head: true }).eq('user_id', user.id).in('concepto_id', ids)
-      if (count > 0) { alert(`Tiene ${count} movimiento(s). No se puede eliminar.`); return }
+  async function saveCat(e) {
+    e.preventDefault()
+    setSavingCat(true)
+    if (editCat) {
+      await supabase.from('categorias').update({ nombre: formCat.nombre, tipo: formCat.tipo }).eq('id', editCat.id)
+    } else {
+      await supabase.from('categorias').insert({ nombre: formCat.nombre, tipo: formCat.tipo, user_id: user.id })
     }
-    if (!confirm(`¿Eliminar "${cat.nombre}"?`)) return
-    const { error } = await supabase.from('categorias').delete().eq('id', cat.id).eq('user_id', user.id)
-    if (error) { alert('Error: ' + error.message); return }
-    load()
+    setEditCat(null)
+    setFormCat({ nombre: '', tipo: 'Gasto' })
+    setSavingCat(false)
+    loadCatalogo()
+  }
+
+  function startEditCat(c) {
+    setEditCat(c)
+    setFormCat({ nombre: c.nombre, tipo: c.tipo })
+  }
+
+  async function deleteCat(id) {
+    await supabase.from('categorias').delete().eq('id', id)
+    loadCatalogo()
   }
 
   // ── Conceptos ──
-  function abrirConceptos(cat) { setCatSel(cat); setVista('conceptos') }
-  function abrirNuevoCon() {
+  async function saveCon(e) {
+    e.preventDefault()
+    setSavingCon(true)
+    if (editCon) {
+      await supabase.from('conceptos').update({
+        nombre: formCon.nombre,
+        categoria_id: formCon.categoria_id || null,
+        activo: formCon.activo,
+      }).eq('id', editCon.id).eq('user_id', user.id)
+    } else {
+      await supabase.from('conceptos').insert({
+        nombre: formCon.nombre,
+        categoria_id: formCon.categoria_id || null,
+        activo: true,
+        user_id: user.id,
+      })
+    }
     setEditCon(null)
-    setFormCon({ nombre: '', esencial: 'E', fijo_variable: 'F', periodicidad: 'Mensual', monto_presupuestado: '', dia_pago: '', mes_ciclo: '', dia_vencimiento: '', observaciones: '', meta_id: '' })
-    setModalCon(true)
-  }
-  function abrirEditarCon(con) {
-    setEditCon(con.id)
-    setFormCon({ nombre: con.nombre||'', esencial: con.esencial||'E', fijo_variable: con.fijo_variable||'F', periodicidad: con.periodicidad||'Mensual', monto_presupuestado: con.monto_presupuestado!=null?String(con.monto_presupuestado):'', dia_pago: con.dia_pago!=null?String(con.dia_pago):'', mes_ciclo: con.mes_ciclo!=null?String(con.mes_ciclo):'', dia_vencimiento: con.dia_vencimiento!=null?String(con.dia_vencimiento):'', observaciones: con.observaciones||'', meta_id: con.meta_id||'' })
-    setModalCon(true)
-  }
-  async function guardarCon(e) {
-    e.preventDefault(); if (!formCon.nombre.trim() || !catSel) return; setSaving(true)
-    const payload = { nombre: formCon.nombre.trim(), esencial: formCon.esencial, fijo_variable: formCon.fijo_variable, periodicidad: formCon.periodicidad, monto_presupuestado: formCon.monto_presupuestado ? parseFloat(formCon.monto_presupuestado) : null, dia_pago: formCon.dia_pago ? parseInt(formCon.dia_pago) : null, mes_ciclo: formCon.mes_ciclo ? parseInt(formCon.mes_ciclo) : null, dia_vencimiento: formCon.dia_vencimiento ? parseInt(formCon.dia_vencimiento) : null, observaciones: formCon.observaciones || null, meta_id: formCon.meta_id || null }
-    const { error } = editandoCon
-      ? await supabase.from('conceptos').update(payload).eq('id', editandoCon).eq('user_id', user.id)
-      : await supabase.from('conceptos').insert({ ...payload, user_id: user.id, categoria_id: catSel.id, activo: true })
-    setSaving(false); if (error) { alert('Error: ' + error.message); return }
-    setModalCon(false); load()
-  }
-  async function eliminarCon(con) {
-    const { count } = await supabase.from('transacciones').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('concepto_id', con.id)
-    if (count > 0) { alert(`Tiene ${count} movimiento(s). No se puede eliminar.`); return }
-    if (!confirm(`¿Eliminar "${con.nombre}"?`)) return
-    const { error } = await supabase.from('conceptos').delete().eq('id', con.id).eq('user_id', user.id)
-    if (error) { alert('Error: ' + error.message); return }
-    load()
-  }
-  async function toggleActivo(con) {
-    await supabase.from('conceptos').update({ activo: !con.activo }).eq('id', con.id).eq('user_id', user.id)
-    load()
+    setFormCon({ nombre: '', categoria_id: '', activo: true })
+    setSavingCon(false)
+    loadCatalogo()
   }
 
-  const porTipo        = TIPOS.map(tipo => ({ tipo, cats: categorias.filter(c => c.tipo === tipo) })).filter(g => g.cats.length > 0)
-  const conceptosDeCat = catSel ? conceptos.filter(c => c.categoria_id === catSel.id) : []
-  const maxCiclo       = { Bimensual: 2, Trimestral: 3, Semestral: 6, Anual: 12 }
-
-  function labelFecha(con) {
-    if (con.fijo_variable !== 'F') return null
-    if (con.periodicidad === 'Mensual' && con.dia_pago) return `Día ${con.dia_pago} c/mes`
-    if (con.mes_ciclo && con.dia_vencimiento) return `Mes ${con.mes_ciclo} · Día ${con.dia_vencimiento}`
-    return null
+  function startEditCon(c) {
+    setEditCon(c)
+    setFormCon({ nombre: c.nombre, categoria_id: c.categoria_id || '', activo: c.activo })
   }
 
-  return (
-    <div className="page animate-in">
-      <div className="page-header">
-        {vista === 'conceptos' ? (
-          <div>
-            <button onClick={() => setVista('categorias')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>← Categorías</button>
-            <h1 style={{ fontSize: '1.3rem' }}>{catSel?.nombre}</h1>
-            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{conceptosDeCat.length} concepto{conceptosDeCat.length !== 1 ? 's' : ''}</p>
-          </div>
-        ) : vista === 'categorias' ? (
-          <div>
-            <button onClick={() => setVista('menu')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>← Configuración</button>
-            <h1>Categorías y conceptos</h1>
-            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{categorias.length} categorías · {conceptos.length} conceptos</p>
-          </div>
-        ) : vista === 'tarjetas' ? (
-          <div>
-            <button onClick={() => setVista('menu')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontFamily: 'var(--font)', padding: 0, marginBottom: 6 }}>← Configuración</button>
-            <h1>Tarjetas de crédito</h1>
-          </div>
-        ) : (
-          <div>
-            <h1>Configuración</h1>
-            <p style={{ color: 'var(--text2)', fontSize: '0.85rem' }}>{user.email}</p>
-          </div>
+  async function toggleActivoCon(c) {
+    await supabase.from('conceptos').update({ activo: !c.activo }).eq('id', c.id).eq('user_id', user.id)
+    loadCatalogo()
+  }
+
+  async function deleteCon(id) {
+    await supabase.from('conceptos').delete().eq('id', id).eq('user_id', user.id)
+    loadCatalogo()
+  }
+
+  async function cerrarSesion() {
+    await supabase.auth.signOut()
+  }
+
+  const catMap = {}
+  for (const c of categorias) catMap[c.id] = c
+
+  const conceptosFiltrados = catFiltro
+    ? conceptos.filter(c => c.categoria_id === catFiltro)
+    : conceptos
+
+  // ─────────────────────────────────────────────────────────────
+  // VISTA: MENÚ HUB
+  // ─────────────────────────────────────────────────────────────
+  if (vista === 'menu') {
+    return (
+      <div className="page">
+        <h1 style={{ fontSize: '1.2rem', marginBottom: '1.5rem' }}>Configuración</h1>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+
+          {/* Administrar categorías */}
+          <button
+            className="btn btn-ghost"
+            style={{ justifyContent: 'flex-start', gap: 14, padding: '1rem 1.1rem', borderRadius: 12, border: '1px solid var(--border)' }}
+            onClick={() => setVista('categorias')}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M4 6h16M4 10h16M4 14h8"/>
+              </svg>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <p style={{ fontWeight: 600, fontSize: '0.95rem' }}>Administrar categorías</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>Categorías y conceptos de gasto e ingreso</p>
+            </div>
+            <span style={{ marginLeft: 'auto', color: 'var(--text3)' }}>›</span>
+          </button>
+
+          {/* Administrar tarjetas */}
+          <button
+            className="btn btn-ghost"
+            style={{ justifyContent: 'flex-start', gap: 14, padding: '1rem 1.1rem', borderRadius: 12, border: '1px solid var(--border)' }}
+            onClick={() => setVista('tarjetas')}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round">
+                <rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/>
+              </svg>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <p style={{ fontWeight: 600, fontSize: '0.95rem' }}>Administrar tarjetas de crédito</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>Deudas, extractos y proyecciones TC</p>
+            </div>
+            <span style={{ marginLeft: 'auto', color: 'var(--text3)' }}>›</span>
+          </button>
+
+          {/* Cargar nómina — NUEVO */}
+          <button
+            className="btn btn-ghost"
+            style={{ justifyContent: 'flex-start', gap: 14, padding: '1rem 1.1rem', borderRadius: 12, border: '1px solid var(--border)' }}
+            onClick={() => setModalNomina(true)}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <p style={{ fontWeight: 600, fontSize: '0.95rem' }}>Cargar comprobante de nómina</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>Registra todos los conceptos automáticamente</p>
+            </div>
+            <span style={{ marginLeft: 'auto', color: 'var(--text3)' }}>›</span>
+          </button>
+
+          {/* Cerrar sesión */}
+          <button
+            className="btn btn-ghost"
+            style={{ justifyContent: 'flex-start', gap: 14, padding: '1rem 1.1rem', borderRadius: 12, border: '1px solid var(--border)', marginTop: '0.5rem' }}
+            onClick={cerrarSesion}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+              </svg>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <p style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--red)' }}>Cerrar sesión</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>Salir de tu cuenta</p>
+            </div>
+          </button>
+        </div>
+
+        {/* Modal nómina */}
+        {modalNomina && (
+          <NominaUploader
+            onClose={() => setModalNomina(false)}
+            onSaved={() => setModalNomina(false)}
+          />
         )}
       </div>
+    )
+  }
 
-      {/* ── VISTA MENÚ PRINCIPAL ── */}
-      {vista === 'menu' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <button
-            onClick={() => { setVista('categorias'); load() }}
-            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font)', width: '100%' }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(79,142,247,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
-            </div>
-            <div>
-              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Administrar categorías</p>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>Categorías, conceptos y presupuestos</p>
-            </div>
-            <svg style={{ marginLeft: 'auto', color: 'var(--text3)' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
-          </button>
-
-          <button
-            onClick={() => setVista('tarjetas')}
-            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font)', width: '100%' }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(247,180,79,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="1.8" strokeLinecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>
-            </div>
-            <div>
-              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Administrar tarjetas de crédito</p>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text2)' }}>Deudas, cuotas y carga de extractos</p>
-            </div>
-            <svg style={{ marginLeft: 'auto', color: 'var(--text3)' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
-          </button>
-
-          <div style={{ marginTop: '0.5rem', padding: '1rem 1.25rem', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12 }}>
-            <p style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: 6 }}>Cuenta activa</p>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--text2)', marginBottom: 12 }}>{user.email}</p>
-            <button className="btn btn-ghost w-full" onClick={signOut} style={{ justifyContent: 'center', color: 'var(--red)', borderColor: 'rgba(247,95,95,0.3)' }}>Cerrar sesión</button>
-          </div>
+  // ─────────────────────────────────────────────────────────────
+  // VISTA: TARJETAS (inline, igual que antes)
+  // ─────────────────────────────────────────────────────────────
+  if (vista === 'tarjetas') {
+    return (
+      <div className="page">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setVista('menu')} style={{ padding: '4px 10px' }}>← Volver</button>
+          <h1 style={{ fontSize: '1.1rem', margin: 0 }}>Tarjetas de crédito</h1>
         </div>
-      )}
+        <TarjetasPage />
+      </div>
+    )
+  }
 
-      {/* ── VISTA TARJETAS ── */}
-      {vista === 'tarjetas' && <TarjetasPage />}
+  // ─────────────────────────────────────────────────────────────
+  // VISTA: CATEGORÍAS (igual que antes)
+  // ─────────────────────────────────────────────────────────────
+  return (
+    <div className="page">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => setVista('menu')} style={{ padding: '4px 10px' }}>← Volver</button>
+        <h1 style={{ fontSize: '1.1rem', margin: 0 }}>Categorías y conceptos</h1>
+      </div>
 
-      {errorMsg && <div style={{ background: 'rgba(247,95,95,0.1)', border: '1px solid rgba(247,95,95,0.3)', borderRadius: 8, padding: '0.75rem 1rem', color: 'var(--red)', fontSize: '0.85rem', marginBottom: '1rem' }}>{errorMsg}</div>}
-
-      {/* ── VISTA CATEGORÍAS ── */}
-      {vista === 'categorias' && (
+      {loading ? (
+        <div style={{ paddingTop: '1rem' }}>
+          {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 60, marginBottom: 10, borderRadius: 10 }} />)}
+        </div>
+      ) : (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
-            <button className="btn btn-primary btn-sm" onClick={abrirNuevaCat}>+ Categoría</button>
-          </div>
-          {loading ? [1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 52, marginBottom: 8, borderRadius: 10 }} />) :
-           categorias.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
-              <p style={{ marginBottom: 12 }}>No tienes categorías aún</p>
-              <button className="btn btn-primary" onClick={abrirNuevaCat}>Crear primera categoría</button>
-            </div>
-          ) : porTipo.map(({ tipo, cats }) => (
-            <div key={tipo} style={{ marginBottom: '1.25rem' }}>
-              <p style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: TIPO_COLORS[tipo], marginBottom: 8, paddingLeft: 2 }}>{tipo} · {cats.length}</p>
-              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                {cats.map((cat, i) => {
-                  const nCon = conceptos.filter(c => c.categoria_id === cat.id).length
-                  const nTx  = txCats[cat.id] || 0
-                  const ok   = nTx === 0 && conceptos.filter(c => c.categoria_id === cat.id && c.activo).length === 0
-                  return (
-                    <div key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 14px', borderBottom: i < cats.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: TIPO_COLORS[tipo], flexShrink: 0 }} />
-                      <button onClick={() => abrirConceptos(cat)} style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, fontFamily: 'var(--font)' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text)' }}>{cat.nombre}</span>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text3)', marginLeft: 8 }}>{nCon} concepto{nCon !== 1 ? 's' : ''}{nTx > 0 ? ` · ${nTx} mov.` : ''}</span>
-                      </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => abrirEditarCat(cat)} style={{ padding: '3px 10px', fontSize: '0.78rem', flexShrink: 0 }}>Editar</button>
-                      <button onClick={() => eliminarCat(cat)} title={ok ? 'Eliminar' : 'Tiene movimientos o conceptos activos'} style={{ background: 'none', border: 'none', cursor: ok ? 'pointer' : 'not-allowed', color: ok ? 'var(--text3)' : 'var(--bg4)', fontSize: '1.1rem', padding: '2px 4px', lineHeight: 1, flexShrink: 0 }}>×</button>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-
-          {/* fin lista categorías */}
-        </>
-      )}
-
-      {/* ── VISTA CONCEPTOS ── */}
-      {vista === 'conceptos' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
-            <button className="btn btn-primary btn-sm" onClick={abrirNuevoCon}>+ Concepto</button>
-          </div>
-          {loading ? [1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 60, marginBottom: 8, borderRadius: 10 }} />) :
-           conceptosDeCat.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text2)' }}>
-              <p style={{ marginBottom: 12 }}>Esta categoría no tiene conceptos</p>
-              <button className="btn btn-primary" onClick={abrirNuevoCon}>Crear primer concepto</button>
-            </div>
-          ) : (
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              {conceptosDeCat.map((con, i) => {
-                const nTx = txConceptos[con.id] || 0
-                const ok  = nTx === 0
-                return (
-                  <div key={con.id} style={{ padding: '11px 14px', borderBottom: i < conceptosDeCat.length - 1 ? '1px solid var(--border)' : 'none', opacity: con.activo ? 1 : 0.5 }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{con.nombre}</span>
-                          {!con.activo && <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text3)' }}>inactivo</span>}
-                        </div>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                          <span className={`badge ${con.esencial === 'E' ? 'badge-blue' : 'badge-purple'}`}>{con.esencial}</span>
-                          <span className={`badge ${con.fijo_variable === 'F' ? 'badge-green' : 'badge-amber'}`}>{con.fijo_variable === 'F' ? 'Fijo' : 'Variable'}</span>
-                          <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>{con.periodicidad}</span>
-                          {con.monto_presupuestado != null && <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text2)' }}>${Number(con.monto_presupuestado).toLocaleString('es-CO')}</span>}
-                          {labelFecha(con) && <span className="badge" style={{ background: 'rgba(247,180,79,0.12)', color: 'var(--amber)' }}>{labelFecha(con)}</span>}
-                          {con.meta_id && metas.find(m => m.id === con.meta_id) && (
-                            <span className="badge" style={{ background: 'rgba(247,180,79,0.12)', color: 'var(--amber)' }}>
-                              🎯 {metas.find(m => m.id === con.meta_id)?.nombre}
-                            </span>
-                          )}
-                          {nTx > 0 && <span className="badge" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text3)' }}>{nTx} mov.</span>}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => abrirEditarCon(con)} style={{ padding: '3px 8px', fontSize: '0.75rem' }}>Editar</button>
-                        <button onClick={() => toggleActivo(con)} title={con.activo ? 'Desactivar' : 'Activar'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: '0.85rem', padding: '3px 4px' }}>{con.activo ? '⏸' : '▶'}</button>
-                        <button onClick={() => eliminarCon(con)} title={ok ? 'Eliminar' : `${nTx} movimientos`} style={{ background: 'none', border: 'none', cursor: ok ? 'pointer' : 'not-allowed', color: ok ? 'var(--text3)' : 'var(--bg4)', fontSize: '1.1rem', padding: '2px 4px', lineHeight: 1 }}>×</button>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── MODAL CATEGORÍA ── */}
-      {modalCat && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModalCat(false)}>
-          <div className="modal">
-            <div className="modal-handle" />
-            <h2>{editandoCat ? 'Editar categoría' : 'Nueva categoría'}</h2>
-            <form onSubmit={guardarCat} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div className="input-group"><label>Nombre</label><input className="input" required placeholder="Ej: Salud, Gym..." value={formCat.nombre} onChange={e => setFormCat(p => ({ ...p, nombre: e.target.value }))} autoFocus /></div>
-              <div className="input-group"><label>Tipo</label>
-                <select className="input" value={formCat.tipo} onChange={e => setFormCat(p => ({ ...p, tipo: e.target.value }))}>
-                  {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
+          {/* ── Formulario categoría ── */}
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+              {editCat ? `Editar: ${editCat.nombre}` : 'Nueva categoría'}
+            </h3>
+            <form onSubmit={saveCat} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <input className="input" placeholder="Nombre" value={formCat.nombre}
+                onChange={e => setFormCat(p => ({ ...p, nombre: e.target.value }))} required />
+              <select className="input" value={formCat.tipo}
+                onChange={e => setFormCat(p => ({ ...p, tipo: e.target.value }))}>
+                <option value="Gasto">Gasto</option>
+                <option value="Ingreso">Ingreso</option>
+                <option value="Ahorro/Inversión">Ahorro/Inversión</option>
+              </select>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }} onClick={() => setModalCat(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }} disabled={saving}>{saving ? 'Guardando...' : editandoCat ? 'Actualizar' : 'Crear'}</button>
+                {editCat && (
+                  <button type="button" className="btn btn-ghost" style={{ flex: 1, justifyContent: 'center' }}
+                    onClick={() => { setEditCat(null); setFormCat({ nombre: '', tipo: 'Gasto' }) }}>Cancelar</button>
+                )}
+                <button type="submit" className="btn btn-primary" style={{ flex: 2, justifyContent: 'center' }} disabled={savingCat}>
+                  {savingCat ? 'Guardando...' : editCat ? 'Actualizar' : 'Agregar categoría'}
+                </button>
               </div>
             </form>
           </div>
-        </div>
-      )}
 
-      {/* ── MODAL CONCEPTO ── */}
-      {modalCon && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setModalCon(false)}>
-          <div className="modal">
-            <div className="modal-handle" />
-            <h2>{editandoCon ? 'Editar concepto' : `Nuevo · ${catSel?.nombre}`}</h2>
-            <form onSubmit={guardarCon} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              <div className="input-group"><label>Nombre</label><input className="input" required placeholder="Ej: Arriendo, Mercado..." value={formCon.nombre} onChange={e => setFormCon(p => ({ ...p, nombre: e.target.value }))} autoFocus /></div>
-              <div className="grid-2">
-                <div className="input-group"><label>Esencial</label>
-                  <select className="input" value={formCon.esencial} onChange={e => setFormCon(p => ({ ...p, esencial: e.target.value }))}>
-                    <option value="E">E — Esencial</option><option value="NE">NE — No esencial</option><option value="N/A">N/A</option>
-                  </select>
+          {/* ── Lista categorías ── */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            {['Ingreso', 'Gasto', 'Ahorro/Inversión'].map(tipo => {
+              const cats = categorias.filter(c => c.tipo === tipo)
+              if (cats.length === 0) return null
+              return (
+                <div key={tipo} style={{ marginBottom: '0.75rem' }}>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4, letterSpacing: '0.04em' }}>{tipo}</p>
+                  {cats.map(c => (
+                    <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
+                      <span style={{ flex: 1, fontSize: '0.88rem' }}>{c.nombre}</span>
+                      <button className="btn btn-ghost btn-sm" onClick={() => startEditCat(c)} style={{ fontSize: '0.75rem' }}>Editar</button>
+                      <button onClick={() => deleteCat(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
                 </div>
-                <div className="input-group"><label>Fijo / Variable</label>
-                  <select className="input" value={formCon.fijo_variable} onChange={e => setFormCon(p => ({ ...p, fijo_variable: e.target.value }))}>
-                    <option value="F">F — Fijo</option><option value="V">V — Variable</option>
-                  </select>
-                </div>
-              </div>
-              <div className="grid-2">
-                <div className="input-group"><label>Periodicidad</label>
-                  <select className="input" value={formCon.periodicidad} onChange={e => setFormCon(p => ({ ...p, periodicidad: e.target.value, dia_pago: '', mes_ciclo: '', dia_vencimiento: '' }))}>
-                    {PERIODICIDADES.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-                <div className="input-group"><label>Monto presupuestado</label>
-                  <input className="input" type="number" min="0" placeholder="0" value={formCon.monto_presupuestado} onChange={e => setFormCon(p => ({ ...p, monto_presupuestado: e.target.value }))} style={{ fontFamily: 'var(--mono)' }} />
-                </div>
-              </div>
-              {formCon.fijo_variable === 'F' && (
-                formCon.periodicidad === 'Mensual' ? (
-                  <div className="input-group"><label>Día de pago (1–31)</label><input className="input" type="number" min="1" max="31" placeholder="Ej: 15" value={formCon.dia_pago} onChange={e => setFormCon(p => ({ ...p, dia_pago: e.target.value }))} /></div>
-                ) : (
-                  <div className="grid-2">
-                    <div className="input-group"><label>Mes del ciclo (1–{maxCiclo[formCon.periodicidad]||12})</label><input className="input" type="number" min="1" max={maxCiclo[formCon.periodicidad]||12} value={formCon.mes_ciclo} onChange={e => setFormCon(p => ({ ...p, mes_ciclo: e.target.value }))} /></div>
-                    <div className="input-group"><label>Día vencimiento</label><input className="input" type="number" min="1" max="31" placeholder="Ej: 20" value={formCon.dia_vencimiento} onChange={e => setFormCon(p => ({ ...p, dia_vencimiento: e.target.value }))} /></div>
-                  </div>
-                )
-              )}
-              <div className="input-group"><label>Observaciones (opcional)</label><input className="input" type="text" placeholder="Notas..." value={formCon.observaciones} onChange={e => setFormCon(p => ({ ...p, observaciones: e.target.value }))} /></div>
+              )
+            })}
+          </div>
 
-              {/* Meta asociada — solo para conceptos de Ahorro/Inversión */}
-              {catSel?.tipo === 'Ahorro/Inversión' && (
-                <div className="input-group">
-                  <label>Meta asociada (opcional)</label>
-                  <select className="input" value={formCon.meta_id}
-                    onChange={e => setFormCon(p => ({ ...p, meta_id: e.target.value }))}>
-                    <option value="">— Sin meta asociada —</option>
-                    {metas.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-                  </select>
-                  <p style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: 4 }}>
-                    Si está asociada, al registrar un aporte se actualizará automáticamente el acumulado de la meta.
-                  </p>
-                </div>
+          {/* ── Formulario concepto ── */}
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+              {editCon ? `Editar: ${editCon.nombre}` : 'Nuevo concepto'}
+            </h3>
+            <form onSubmit={saveCon} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <input className="input" placeholder="Nombre del concepto" value={formCon.nombre}
+                onChange={e => setFormCon(p => ({ ...p, nombre: e.target.value }))} required />
+              <select className="input" value={formCon.categoria_id}
+                onChange={e => setFormCon(p => ({ ...p, categoria_id: e.target.value }))}>
+                <option value="">— Sin categoría —</option>
+                {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre} ({c.tipo})</option>)}
+              </select>
+              {editCon && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                  <input type="checkbox" checked={formCon.activo}
+                    onChange={e => setFormCon(p => ({ ...p, activo: e.target.checked }))} />
+                  Activo
+                </label>
               )}
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }} onClick={() => setModalCon(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center' }} disabled={saving}>{saving ? 'Guardando...' : editandoCon ? 'Actualizar' : 'Crear'}</button>
+                {editCon && (
+                  <button type="button" className="btn btn-ghost" style={{ flex: 1, justifyContent: 'center' }}
+                    onClick={() => { setEditCon(null); setFormCon({ nombre: '', categoria_id: '', activo: true }) }}>Cancelar</button>
+                )}
+                <button type="submit" className="btn btn-primary" style={{ flex: 2, justifyContent: 'center' }} disabled={savingCon}>
+                  {savingCon ? 'Guardando...' : editCon ? 'Actualizar' : 'Agregar concepto'}
+                </button>
               </div>
             </form>
           </div>
-        </div>
+
+          {/* ── Lista conceptos ── */}
+          <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: '0.75rem', alignItems: 'center' }}>
+              <p style={{ fontSize: '0.88rem', fontWeight: 600 }}>Conceptos</p>
+              <select className="input" value={catFiltro}
+                onChange={e => setCatFiltro(e.target.value)}
+                style={{ fontSize: '0.78rem', padding: '4px 8px', height: 30, flex: 1 }}>
+                <option value="">Todas las categorías</option>
+                {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+              </select>
+            </div>
+            {conceptosFiltrados.map(c => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.5rem 0', borderBottom: '1px solid var(--border)', opacity: c.activo ? 1 : 0.5 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: '0.85rem' }}>{c.nombre}</p>
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text3)' }}>{catMap[c.categoria_id]?.nombre || 'Sin categoría'}</p>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => startEditCon(c)} style={{ fontSize: '0.72rem' }}>Editar</button>
+                <button onClick={() => toggleActivoCon(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: c.activo ? 'var(--amber)' : 'var(--text3)', fontSize: '0.72rem', fontFamily: 'var(--font)' }}>
+                  {c.activo ? 'Desactivar' : 'Activar'}
+                </button>
+                <button onClick={() => deleteCon(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
