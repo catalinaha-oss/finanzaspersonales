@@ -184,6 +184,7 @@ export default function NominaUploader({ onClose, onSaved }) {
         concepto_id:     it.concepto_id,
         medio_pago:      'nómina',
         observaciones:   `${nominaData.periodo} · ${nominaData.empleador}`,
+        origen:          'nomina',
       }
 
       const { error: txErr } = await supabase.from('transacciones').insert(fila)
