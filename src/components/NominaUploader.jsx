@@ -32,6 +32,7 @@ export default function NominaUploader({ onClose, onSaved }) {
   const [pendientes,    setPendientes]    = useState([])           // índices de items sin concepto_id aún
   const [indicePend,    setIndicePend]    = useState(0)            // cuál pendiente estamos resolviendo
   const [resultado,     setResultado]     = useState(null)
+  const [selConcepto,   setSelConcepto]   = useState('')
   const [fechaTx,       setFechaTx]       = useState(new Date().toISOString().split('T')[0])
 
   // Cargar conceptos, categorias y mapa guardado al montar
@@ -129,6 +130,7 @@ export default function NominaUploader({ onClose, onSaved }) {
       i === idx ? { ...it, concepto_id } : it
     )
     setItems(nuevosItems)
+    setSelConcepto('')   // limpiar selección para el siguiente
 
     if (indicePend + 1 < pendientes.length) {
       setIndicePend(i => i + 1)
@@ -137,13 +139,13 @@ export default function NominaUploader({ onClose, onSaved }) {
     }
   }
 
-  // Omitir este concepto (no se registrará)
   function omitirConcepto() {
     const idx = pendientes[indicePend]
     const nuevosItems = items.map((it, i) =>
       i === idx ? { ...it, concepto_id: '__omitir__' } : it
     )
     setItems(nuevosItems)
+    setSelConcepto('')   // limpiar selección para el siguiente
 
     if (indicePend + 1 < pendientes.length) {
       setIndicePend(i => i + 1)
@@ -338,12 +340,12 @@ export default function NominaUploader({ onClose, onSaved }) {
               </div>
             </div>
 
-            {/* Selector de concepto */}
+            {/* Selector de concepto — valor controlado + botón confirmar */}
             <div className="input-group">
               <label>Asignar a concepto de MisFinanzas</label>
               <select className="input"
-                onChange={e => { if (e.target.value) asignarConcepto(e.target.value) }}
-                defaultValue="">
+                value={selConcepto}
+                onChange={e => setSelConcepto(e.target.value)}>
                 <option value="">— Selecciona un concepto —</option>
                 {conceptosFiltrados(itemConcepto.tipo_nomina).map(c => {
                   const cat = categorias.find(cat => cat.id === c.categoria_id)
@@ -363,7 +365,12 @@ export default function NominaUploader({ onClose, onSaved }) {
             <div style={{ display: 'flex', gap: 8 }}>
               <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center', fontSize: '0.82rem' }}
                 onClick={omitirConcepto}>
-                Omitir este concepto
+                Omitir
+              </button>
+              <button type="button" className="btn btn-primary w-full" style={{ justifyContent: 'center', fontSize: '0.82rem' }}
+                disabled={!selConcepto}
+                onClick={() => { asignarConcepto(selConcepto); setSelConcepto('') }}>
+                Confirmar →
               </button>
             </div>
           </div>
