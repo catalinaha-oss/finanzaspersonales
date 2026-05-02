@@ -33,7 +33,7 @@ export default function NominaUploader({ onClose, onSaved }) {
   const [indicePend,    setIndicePend]    = useState(0)            // cuál pendiente estamos resolviendo
   const [resultado,     setResultado]     = useState(null)
   const [selConcepto,   setSelConcepto]   = useState('')
-  const [fechaTx,       setFechaTx]       = useState(new Date().toISOString().split('T')[0])
+  const [fechaTx,       setFechaTx]       = useState('')
 
   // Cargar conceptos, categorias y mapa guardado al montar
   useEffect(() => {
@@ -155,6 +155,10 @@ export default function NominaUploader({ onClose, onSaved }) {
   }
 
   async function guardar() {
+    if (!fechaTx) {
+      setErrMsg('Debes ingresar la fecha antes de guardar.')
+      return
+    }
     setEstado('guardando')
     setErrMsg('')
     let insertados = 0
@@ -449,9 +453,10 @@ export default function NominaUploader({ onClose, onSaved }) {
             <div style={{ display: 'flex', gap: 8 }}>
               <button type="button" className="btn btn-ghost w-full" style={{ justifyContent: 'center' }}
                 onClick={() => setEstado('idle')}>← Volver</button>
-              <button type="button" className="btn btn-primary w-full" style={{ justifyContent: 'center' }}
+              <button type="button" className="btn btn-primary w-full" style={{ justifyContent: 'center', opacity: !fechaTx ? 0.5 : 1 }}
+                disabled={!fechaTx}
                 onClick={guardar}>
-                Guardar {itemsParaRevision.length} transacción{itemsParaRevision.length !== 1 ? 'es' : ''}
+                {!fechaTx ? 'Ingresa la fecha primero' : `Guardar ${itemsParaRevision.length} transacción${itemsParaRevision.length !== 1 ? 'es' : ''}`}
               </button>
             </div>
           </div>
