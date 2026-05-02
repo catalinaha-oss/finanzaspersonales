@@ -154,42 +154,50 @@ export default function NominaUploader({ onClose, onSaved }) {
 
   async function guardar() {
     setEstado('guardando')
+    setErrMsg('')
     let insertados = 0
-    const mapaActualizar = [] // { clave, concepto_id }
+    const mapaActualizar = []
+    const errores = []
 
     for (const it of items) {
       if (!it.concepto_id || it.concepto_id === '__omitir__') continue
 
-      // Insertar transacción
       const conceptoObj = conceptos.find(c => c.id === it.concepto_id)
       if (!conceptoObj) continue
 
-      // Determinar tipo_movimiento según el concepto en Supabase
-      // Se infiere de la categoría del concepto
       const catObj = categorias.find(c => c.id === conceptoObj.categoria_id)
       let tipo_movimiento = 'gasto'
       if (catObj?.tipo === 'Ingreso') tipo_movimiento = 'ingreso'
       else if (catObj?.tipo === 'Ahorro/Inversión') tipo_movimiento = 'ahorro'
 
-      await supabase.from('transacciones').insert({
+      const fila = {
         user_id:         user.id,
         fecha:           fechaTx,
-        valor:           it.valor,
+        valor:           Number(it.valor),
         tipo_movimiento,
         concepto_id:     it.concepto_id,
         medio_pago:      'nómina',
         observaciones:   `${nominaData.periodo} · ${nominaData.empleador}`,
-        origen:          'nomina',
-      })
-      insertados++
+      }
 
-      // Si el mapa no tenía esta clave, guardarla
-      if (!mapaGuardado[it.clave]) {
-        mapaActualizar.push({ clave: it.clave, concepto_id: it.concepto_id, nombre: it.nombre })
+      const { error: txErr } = await supabase.from('transacciones').insert(fila)
+
+      if (txErr) {
+        errores.push(`${it.nombre}: ${txErr.message}`)
+      } else {
+        insertados++
+        if (!mapaGuardado[it.clave]) {
+          mapaActualizar.push({ clave: it.clave, concepto_id: it.concepto_id, nombre: it.nombre })
+        }
       }
     }
 
-    // Guardar nuevas claves en nomina_conceptos_mapa
+    if (insertados === 0 && errores.length > 0) {
+      setErrMsg('Error al guardar: ' + errores[0])
+      setEstado('error')
+      return
+    }
+
     for (const m of mapaActualizar) {
       await supabase.from('nomina_conceptos_mapa').upsert({
         user_id:         user.id,
@@ -199,7 +207,11 @@ export default function NominaUploader({ onClose, onSaved }) {
       }, { onConflict: 'user_id,clave_concepto' })
     }
 
-    setResultado({ insertados, mapaActualizar: mapaActualizar.length })
+    setResultado({
+      insertados,
+      errores:        errores.length,
+      mapaActualizar: mapaActualizar.length,
+    })
     setEstado('listo')
   }
 
@@ -454,6 +466,11 @@ export default function NominaUploader({ onClose, onSaved }) {
             <p style={{ color: 'var(--text2)', fontSize: '0.85rem', marginBottom: 4 }}>
               {resultado.insertados} transacción{resultado.insertados !== 1 ? 'es' : ''} registrada{resultado.insertados !== 1 ? 's' : ''}
             </p>
+            {resultado.errores > 0 && (
+              <p style={{ color: 'var(--red)', fontSize: '0.78rem', marginBottom: 4 }}>
+                {resultado.errores} concepto{resultado.errores !== 1 ? 's' : ''} no se pudo{resultado.errores !== 1 ? 'ieron' : ''} guardar
+              </p>
+            )}
             {resultado.mapaActualizar > 0 && (
               <p style={{ color: 'var(--text3)', fontSize: '0.78rem', marginBottom: '1.5rem' }}>
                 {resultado.mapaActualizar} concepto{resultado.mapaActualizar !== 1 ? 's' : ''} nuevo{resultado.mapaActualizar !== 1 ? 's' : ''} aprendido{resultado.mapaActualizar !== 1 ? 's' : ''}
