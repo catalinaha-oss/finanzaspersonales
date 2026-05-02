@@ -32,6 +32,7 @@ export default function NominaUploader({ onClose, onSaved }) {
   const [pendientes,    setPendientes]    = useState([])           // índices de items sin concepto_id aún
   const [indicePend,    setIndicePend]    = useState(0)            // cuál pendiente estamos resolviendo
   const [resultado,     setResultado]     = useState(null)
+  const [fechaTx,       setFechaTx]       = useState(new Date().toISOString().split('T')[0])
 
   // Cargar conceptos, categorias y mapa guardado al montar
   useEffect(() => {
@@ -155,9 +156,6 @@ export default function NominaUploader({ onClose, onSaved }) {
     setEstado('guardando')
     let insertados = 0
     const mapaActualizar = [] // { clave, concepto_id }
-
-    // Calcular la fecha de la nómina para usarla en las transacciones
-    const fechaTx = nominaData.fecha_pago || new Date().toISOString().split('T')[0]
 
     for (const it of items) {
       if (!it.concepto_id || it.concepto_id === '__omitir__') continue
@@ -381,6 +379,13 @@ export default function NominaUploader({ onClose, onSaved }) {
                   <p style={{ fontFamily: 'var(--mono)', fontSize: '0.88rem', fontWeight: 700 }}>{COP(nominaData.neto_pagar)}</p>
                 </div>
               </div>
+            </div>
+
+            {/* Fecha de registro */}
+            <div className="input-group">
+              <label style={{ fontSize: '0.82rem' }}>Fecha de registro de las transacciones</label>
+              <input className="input" type="date" value={fechaTx} onChange={e => setFechaTx(e.target.value)} />
+              <p style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: 3 }}>Normalmente el día que el pago cayó a tu cuenta</p>
             </div>
 
             <p style={{ fontSize: '0.82rem', color: 'var(--text2)' }}>
